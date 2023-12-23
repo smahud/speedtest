@@ -156,7 +156,8 @@ sudo yum install speedtest -y
     
     # Check if all commands executed successfully
     if [ $? -eq 0 ]; then
-        systemctl status rc-local.service
+        cd
+	cd
     fi
     
 else
