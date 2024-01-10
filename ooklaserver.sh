@@ -274,13 +274,4 @@ if [ "$action" = "install" ]; then
 	download_install
 
 	restart_if_running
-
-	echo "NOTE:"
-	echo ""
-	echo "We strongly recommend following instructions at"
-	echo ""
-	echo "   https://www.ookla.com/support/a87011938/"
-	echo ""
-	echo "to ensure your daemon starts automatically when the system reboots"
-	echo ""
 fi
