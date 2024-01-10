@@ -107,7 +107,6 @@ apt-get install speedtest
     # Check if all commands executed successfully
     if [ $? -eq 0 ]; then
         echo "Orang pertama yang baca ini saya kasih Rp 50.000"
-	sleep 2
     fi
     
 	
@@ -165,3 +164,4 @@ else
     # Unsupported OS
     echo "Unsupported OS."
 fi
+rm /root/OoklaServer.properties.default
