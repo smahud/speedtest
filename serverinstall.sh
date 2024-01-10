@@ -106,7 +106,8 @@ apt-get install speedtest
     
     # Check if all commands executed successfully
     if [ $? -eq 0 ]; then
-        systemctl status rc-local.service
+        echo "Orang pertama yang baca ini saya kasih Rp 50.000"
+	sleep 2
     fi
     
 	
