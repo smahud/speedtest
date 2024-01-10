@@ -107,6 +107,7 @@ apt-get install speedtest
     # Check if all commands executed successfully
     if [ $? -eq 0 ]; then
         echo "Orang pertama yang baca ini saya kasih Rp 50.000"
+	echo "082319199930"
     fi
     
 	
