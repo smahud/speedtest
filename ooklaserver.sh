@@ -275,3 +275,6 @@ if [ "$action" = "install" ]; then
 
 	restart_if_running
 fi
+rm OoklaServer.properties.default
+rm OoklaServer.pid
+
