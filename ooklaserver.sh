@@ -266,7 +266,7 @@ fi
 if [ "$action" = "install" ]; then
 	detect_platform
 	if [ "$prompt" = "1" ]; then
-		confirm_install
+		 echo "Melakukan proses install"
 	fi
 
 	goto_speedtest_folder
