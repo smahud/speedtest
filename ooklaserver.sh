@@ -104,8 +104,8 @@ download_install() {
 	if [ -n "$curl_path" ]; then
 		curl -s -O $gzip_download_url
 
-	elif [ -n -q "$wget_path" ]; then
-		wget "$gzip_download_url" -O "$gzip_download_file"
+	elif [ -n "$wget_path" ]; then
+		wget -q "$gzip_download_url" -O "$gzip_download_file"
 
 	elif [ -n "$fetch_path" ]; then
 		# fetch is found in base OS in FreeBSD
