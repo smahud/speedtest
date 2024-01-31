@@ -102,9 +102,9 @@ download_install() {
 
 	echo "Downloading Server Files"
 	if [ -n "$curl_path" ]; then
-		curl -O $gzip_download_url
+		curl -s -O $gzip_download_url
 
-	elif [ -n "$wget_path" ]; then
+	elif [ -n -q "$wget_path" ]; then
 		wget "$gzip_download_url" -O "$gzip_download_file"
 
 	elif [ -n "$fetch_path" ]; then
