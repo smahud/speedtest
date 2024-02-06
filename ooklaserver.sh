@@ -254,16 +254,12 @@ if [ "$action" = "stop" ]; then
 	stop_if_running
 fi
 
-
 if [ "$action" = "help" ]; then
 	display_usage
 fi
 
 if [ "$action" = "install" ]; then
 	detect_platform
-	if [ "$prompt" = "1" ]; then
-		confirm_install
-	fi
 
 	goto_speedtest_folder
 
