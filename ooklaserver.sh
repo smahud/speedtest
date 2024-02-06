@@ -1,24 +1,25 @@
 #!/bin/sh
 ##################
 # OoklaServer install and management script
-# (C) 2013 Ookla
+# (C) 2024 Ookla
 ##################
-BASE_DOWNLOAD_PATH='https://install.speedtest.net/ooklaserver/stable/'
+# Last Update 2024-01-30
+
+BASE_DOWNLOAD_PATH="https://install.speedtest.net/ooklaserver/stable/"
+DAEMON_FILE="OoklaServer"
 INSTALL_DIR=''
-DAEMON_FILE='OoklaServer'
 PID_FILE="$DAEMON_FILE.pid"
 
-
 display_usage() {
-	echo "This script can be used to install or control a Ookla Server."
+	echo "OoklaServer installation and Management Script"
 	echo  "Usage:"
 	echo  "$0 [-f|--force] [-i|--installdir <dir>] command"
 	echo  ""
 	echo  "  Valid commands: install, start, stop, restart"
-	echo  "   install - downloads and installs the Ookla server"
-	echo  "   start   - starts the server if not running"
-	echo  "   stop    - stops the server if running"
-	echo  "   restart - stops the server if running, and restarts it"
+	echo  "   install - downloads and installs OoklaServer"
+	echo  "   start   - starts OoklaServer if not running"
+	echo  "   stop    - stops OoklaServer if running"
+	echo  "   restart - stops OoklaServer if running, and restarts it"
 	echo  " "
 	echo  "  -f|--force           Do not prompt before install"
 	echo  "  -i|--install <dir>   Install to specified folder instead of the current folder"
@@ -37,39 +38,34 @@ detect_platform() {
 		server_package='macosx'
 		;;
 	Linux)
-		server_package='linux32'
+		server_package='linux-aarch64-static-musl'
 		arch=`uname -m`
 		if [ "$arch" = "x86_64" ]; then
-			server_package='linux64'
+			server_package='linux-x86_64-static-musl'
 		fi
 		;;
 	FreeBSD)
-		server_package='freebsd32'
-		arch=`uname -m`
-		if [ "$arch" = "amd64" ]; then
-			server_package='freebsd64'
-		fi
+		server_package='freebsd13_64'
 		;;
 	*)
 		echo "Please Select the server Platform : "
 		echo "1) macOS"
-		echo "2) Linux (32bit)"
-		echo "3) Linux (64bit)"
-		echo "4) FreeBSD (32bit)"
-		echo "5) FreeBSD (64bit)"
+		echo "2) Linux (aarch64)"
+		echo "3) Linux (x86_64)"
+		echo "4) FreeBSD (64bit)"
 
 		read n
 		case $n in
 			1) server_package='macosx';;
-			2) server_package='linux32';;
-			3) server_package='linux64';;
-			4) server_package='freebsd32';;
-			5) server_package='freebsd64';;
+			2) server_package='linux-aarch64-static-musl';;
+			3) server_package='linux-x86_64-static-musl';;
+			4) server_package='freebsd13_64';;
 		esac
 	esac
 
 	echo "Server Platform is $server_package"
 }
+
 
 goto_speedtest_folder() {
 	# determine if base install folder exists
@@ -105,7 +101,7 @@ download_install() {
 		curl -s -O $gzip_download_url
 
 	elif [ -n "$wget_path" ]; then
-		wget -q "$gzip_download_url" -O "$gzip_download_file"
+		wget "$gzip_download_url" -q -O "$gzip_download_file"
 
 	elif [ -n "$fetch_path" ]; then
 		# fetch is found in base OS in FreeBSD
@@ -266,7 +262,7 @@ fi
 if [ "$action" = "install" ]; then
 	detect_platform
 	if [ "$prompt" = "1" ]; then
-		 echo "Melakukan proses install"
+		confirm_install
 	fi
 
 	goto_speedtest_folder
