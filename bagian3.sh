@@ -78,12 +78,15 @@ else
         if command_exists zypper; then
             # openSUSE
             install_certbot_opensuse
+	    print_hash 30
         elif command_exists apt; then
             # Ubuntu/Debian
             install_certbot_ubuntu
+	    print_hash 30
         elif command_exists yum; then
             # CentOS/RHEL
             install_certbot_centos
+	    print_hash 30
         else
             echo "Distribusi Linux tidak didukung."
             print_hash 100
