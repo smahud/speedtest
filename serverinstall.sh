@@ -1,6 +1,6 @@
 #!/bin/bash
 # Get OS information
-source common_functions1.sh
+source /root/speedtest/common_functions1.sh
 os=$(uname -s)
 
 echo "Membuat file OoklaServer.properties "
