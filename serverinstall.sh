@@ -1,6 +1,10 @@
 #!/bin/bash
 # Get OS information
 source /root/speedtest/common_functions1.sh
+source /root/data.ini
+
+systemctl stop rc-local.service
+
 os=$(uname -s)
 
 echo "Membuat file OoklaServer.properties "
@@ -46,8 +50,6 @@ EOT
 # Get OS information
 os=$(uname -s)
 
-systemctl stop rc-local.service
-
 # Check if OS is Debian/Ubuntu
 if [ "$os" = "Linux" ] && [ -f "/etc/debian_version" ]; then
     # Execute Debian/Ubuntu command
@@ -61,7 +63,6 @@ apt-get install speedtest
         echo "Orang pertama yang baca ini saya kasih Rp 50.000,-"
 	echo "082319199930"
  	print_hash 30
-  	print_hash 30
   	print_hash 30
     fi
     
