@@ -1,5 +1,6 @@
 # Cek apakah file data.ini sudah ada
 source common_functions1.sh
+source /root/data.ini
 echo "Melakukan input dari file data.ini"
 if [ -e "/root/data.ini" ]; then
     echo "File data.ini ditemukan, melanjutkan perintah..."
@@ -10,7 +11,6 @@ else
     exit 1
 fi
 # Sumberkan data.ini
-source /root/data.ini
 sudo mkdir -p /etc/letsencrypt
 rm /etc/letsencrypt/dnscloudflare.ini
 sudo tee /etc/letsencrypt/dnscloudflare.ini > /dev/null <<END
