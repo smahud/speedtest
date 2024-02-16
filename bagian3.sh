@@ -1,6 +1,6 @@
 # Bagian III
 # Fungsi untuk memeriksa apakah suatu perintah ada
-source install.sh
+source common_functions1.sh
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
