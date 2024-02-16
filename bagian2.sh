@@ -6,8 +6,6 @@ print_hash 30
 
 else
 echo "OoklaServer tidak ditemukan. Menjalankan Perintah Instalasi OoklaServer"
-
-chmod a+x /root/speedtest/*.sh 
 /root/speedtest/serverinstall.sh 
 cd 
 cp /root/speedtest/ooklaserver.sh /root/ooklaserver.sh
