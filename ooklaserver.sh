@@ -4,8 +4,6 @@
 # (C) 2024 Ookla
 ##################
 # Last Update 2024-01-30
-source /root/speedtest/common_functions1.sh
-
 BASE_DOWNLOAD_PATH="https://install.speedtest.net/ooklaserver/stable/"
 DAEMON_FILE="OoklaServer"
 INSTALL_DIR=''
