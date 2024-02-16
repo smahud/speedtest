@@ -95,7 +95,3 @@ else
 		exit 1
     fi
 fi
-
-
-echo "Masuk Bagian IV"
-print_hash 30
