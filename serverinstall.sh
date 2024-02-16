@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Get OS information
+source install.sh
 os=$(uname -s)
 
 # Check if OS is Debian/Ubuntu
