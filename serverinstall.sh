@@ -84,5 +84,5 @@ fi
 cd
 cp /root/speedtest/ooklaserver.sh /root/ooklaserver.sh
 chmod a+x ooklaserver.sh
-/root/ooklaserver.sh
+/root/ooklaserver.sh install
 rm /root/OoklaServer.properties.default
