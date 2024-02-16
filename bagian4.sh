@@ -1,5 +1,5 @@
 # Bagian IV
-source install.sh
+source common_functions1.sh
 if [ "$ApakahPakaiCloudflare" == "Ya" ]; then
     if [ "$ApakahDomainWildcard" == "Ya" ]; then
         # Jika Wildcard dan menggunakan Cloudflare
