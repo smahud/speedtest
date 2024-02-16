@@ -52,10 +52,9 @@ echo "Melanjutkan Bagian V"
 
 	# Memeriksa file OoklaServer
 	echo "Malakukan Update Service OoklaServer..."
-	./ooklaserver.sh stop
-	./ooklaserver.sh install
-	./OoklaServer --daemon
-	./ooklaserver.sh start
+	/root/ooklaserver.sh stop
+	/root/ooklaserver.sh install
+	/root/ooklaserver.sh restart
 	rm OoklaServer.properties.default
 	rm OoklaServer.pid
 	echo "Update Service OoklaServer Berhasil Di Update dan Dijalankan kembali..."
