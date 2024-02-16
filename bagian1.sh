@@ -1,5 +1,5 @@
 # Cek apakah file data.ini sudah ada
-source common_functions1.sh
+source /root/speedtest/common_functions1.sh
 source /root/data.ini
 echo "Melakukan input dari file data.ini"
 if [ -e "/root/data.ini" ]; then
