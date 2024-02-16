@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Get OS information
-source install.sh
+source common_functions1.sh
 os=$(uname -s)
 
 # Check if OS is Debian/Ubuntu
