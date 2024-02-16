@@ -10,6 +10,5 @@ echo "OoklaServer tidak ditemukan. Menjalankan Perintah Instalasi OoklaServer"
 cd 
 cp /root/speedtest/ooklaserver.sh /root/ooklaserver.sh
 echo "OoklaServer berhasil di install"
-echo "Melanjutkan Bagian II"
 print_hash 30
 fi
