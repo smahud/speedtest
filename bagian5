@@ -1,0 +1,64 @@
+# Bagian V
+# Memeriksa apakah layanan OoklaServer sedang berjalan
+	echo "Menghentikan semua service OoklaServer"
+	
+
+
+echo "#Percobaan 1 - Menggunakan file instalasi#"
+if pgrep -x "OoklaServer" > /dev/null; then
+    echo "OoklaServer sedang berjalan. Menghentikan OoklaServer..."
+    ./ooklaserver.sh stop
+else
+    echo "OoklaServer sudah berhenti. Melanjutkan dengan skrip..."
+    sleep 2
+
+    if pgrep -x "OoklaServer" > /dev/null; then
+		echo "#Percobaan 2 - Menggunakan pkill -f#"
+        echo "OoklaServer sedang berjalan. Menghentikan OoklaServer..."
+        sudo pkill -f "OoklaServer"
+    else
+        echo "OoklaServer sudah berhenti. Melanjutkan dengan skrip..."
+        sleep 2
+
+        if pgrep -x "OoklaServer" > /dev/null; then
+			echo "Percobaan 3 - Menggunakan kill -9"
+            echo "OoklaServer sedang berjalan. Menghentikan OoklaServer..."
+            sudo pkill -9 -f "OoklaServer"
+        else
+            echo "OoklaServer sudah berhenti. Melanjutkan dengan skrip..."
+            sleep 2
+        fi
+    fi
+fi
+
+
+# Ganti domain dalam OoklaServer.properties
+sudo sed -i 's|openSSL.server.certificateFile = /etc/letsencrypt/live/[^/]\+/fullchain.pem||' /root/OoklaServer.properties
+sudo sed -i 's|openSSL.server.privateKeyFile = /etc/letsencrypt/live/[^/]\+/privkey.pem||' /root/OoklaServer.properties
+sed -i '/OoklaServer.ssl.useLetsEncrypt = true/d' OoklaServer.properties
+
+
+# Tambahkan baris Certificate baru ke dalam file OoklaServer.properties
+echo "openSSL.server.certificateFile = /etc/letsencrypt/live/$Domain/fullchain.pem" | sudo tee -a /root/OoklaServer.properties > /dev/null
+echo "openSSL.server.privateKeyFile = /etc/letsencrypt/live/$Domain/privkey.pem" | sudo tee -a /root/OoklaServer.properties > /dev/null
+echo "File OoklaServer.properties sudah ter update."
+print_hash 30
+
+
+echo "Melanjutkan Bagian V"
+	print_hash 30
+	
+###################################################################
+
+	# Memeriksa file OoklaServer
+	echo "Malakukan Update Service OoklaServer..."
+	./ooklaserver.sh stop
+	./ooklaserver.sh install
+	./OoklaServer --daemon
+	./ooklaserver.sh start
+	rm OoklaServer.properties.default
+	rm OoklaServer.pid
+	echo "Update Service OoklaServer Berhasil Di Update dan Dijalankan kembali..."
+	print_hash 30
+	
+###################################################################
