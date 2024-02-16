@@ -1,6 +1,7 @@
 # Bagian VI
 # Membuat perintah auto reload OoklaServer setiap pukul 00:00
 # Baris perintah yang ingin ditambahkan ke crontab
+source install.sh
 new_cron_line="0 0 * * * /root/ooklaserver.sh stop && /root/ooklaserver.sh install && /root/ooklaserver.sh start"
 
 # Mendapatkan isi crontab saat ini
