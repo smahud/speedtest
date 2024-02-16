@@ -1,4 +1,4 @@
-#Bagian I
+# Bagian I
 # Cek apakah file data.ini sudah ada
 source /root/speedtest/common_functions1.sh
 source /root/data.ini
