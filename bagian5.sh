@@ -1,6 +1,6 @@
 # Bagian V
 # Memeriksa apakah layanan OoklaServer sedang berjalan
-source install.sh
+source common_functions1.sh
 echo "Menghentikan semua service OoklaServer"
 echo "#Percobaan 1 - Menggunakan file instalasi#"
 if pgrep -x "OoklaServer" > /dev/null; then
