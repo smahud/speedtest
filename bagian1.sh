@@ -1,5 +1,5 @@
 # Cek apakah file data.ini sudah ada
-source install.sh
+source common_functions1.sh
 echo "Melakukan input dari file data.ini"
 if [ -e "/root/data.ini" ]; then
     echo "File data.ini ditemukan, melanjutkan perintah..."
