@@ -1,6 +1,6 @@
 # Bagian IV
 source /root/speedtest/common_functions1.sh
-souece /root/data.ini
+source /root/data.ini
 if [ "$ApakahPakaiCloudflare" == "Ya" ]; then
     if [ "$ApakahDomainWildcard" == "Ya" ]; then
         # Jika Wildcard dan menggunakan Cloudflare
