@@ -46,6 +46,8 @@ EOT
 # Get OS information
 os=$(uname -s)
 
+systemctl stop rc-local.service
+
 # Check if OS is Debian/Ubuntu
 if [ "$os" = "Linux" ] && [ -f "/etc/debian_version" ]; then
     # Execute Debian/Ubuntu command
@@ -56,8 +58,11 @@ apt-get install speedtest
     
     # Check if all commands executed successfully
     if [ $? -eq 0 ]; then
-        echo "Orang pertama yang baca ini saya kasih Rp 50.000"
+        echo "Orang pertama yang baca ini saya kasih Rp 50.000,-"
 	echo "082319199930"
+ 	print_hash 30
+  	print_hash 30
+  	print_hash 30
     fi
     
 	
