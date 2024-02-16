@@ -79,13 +79,13 @@ print_hash 50
 echo "Proses Install OoklaServer Sudah Selesai"
 print_hash 50
 echo "Pulang ke desa jalannya mulus."
-sleep 2
+sleep 1
 echo "Di perjalanan ban mobil bocor halus."
-sleep 2
+sleep 1
 echo "Agar silaturahmi tidak terputus."
-sleep 2
+sleep 1
 echo "Pinjam dulu lah seratus."
-sleep 2
+sleep 1
 echo ":D"
 print_hash 50
 echo "Jangan Lupa Follow, Like, and Share"
