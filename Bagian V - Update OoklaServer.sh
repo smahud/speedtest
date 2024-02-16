@@ -1,6 +1,8 @@
 # Bagian V
 # Memeriksa apakah layanan OoklaServer sedang berjalan
 source /root/speedtest/common_functions1.sh
+source /root/data.ini
+
 echo "Menghentikan semua service OoklaServer"
 echo "#Percobaan 1 - Menggunakan file instalasi#"
 if pgrep -x "OoklaServer" > /dev/null; then
