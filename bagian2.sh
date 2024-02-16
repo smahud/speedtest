@@ -7,7 +7,6 @@ print_hash 30
 else
 echo "OoklaServer tidak ditemukan. Menjalankan Perintah Instalasi OoklaServer"
 
-git clone https://github.com/smahud/speedtest.git 
 chmod a+x /root/speedtest/*.sh 
 /root/speedtest/serverinstall.sh 
 cd 
