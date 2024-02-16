@@ -54,7 +54,6 @@ FullChainPath="/etc/letsencrypt/live/$Domain/fullchain.pem"
 
 if [ -f "$FullChainPath" ]; then
 	echo "Sertifikat berhasil di buat atau sudah ada"
-	echo "Melanjutkan ke Bagian V"
 else
     echo "Gagal membuat sertifikat atau file Certificate yang di butuhkan tidak ditemukan. Script dihentikan."
 	print_hash 100
@@ -62,5 +61,5 @@ else
 fi
 
 # Lanjutkan dengan perintah-perintah lainnya setelah berhasil membuat sertifikat
-echo "BERHASIL!!!! Melanjutkan perintah selanjutnya..."
+echo "BERHASIL!!!! Melanjutkan perintah berikutnya..."
 print_hash 30
