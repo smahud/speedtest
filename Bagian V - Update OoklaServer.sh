@@ -42,12 +42,7 @@ sed -i '/OoklaServer.ssl.useLetsEncrypt = true/d' OoklaServer.properties
 echo "openSSL.server.certificateFile = /etc/letsencrypt/live/$Domain/fullchain.pem" | sudo tee -a /root/OoklaServer.properties > /dev/null
 echo "openSSL.server.privateKeyFile = /etc/letsencrypt/live/$Domain/privkey.pem" | sudo tee -a /root/OoklaServer.properties > /dev/null
 echo "File OoklaServer.properties sudah ter update."
-print_hash 30
 
-
-echo "Melanjutkan Bagian V"
-	print_hash 30
-	
 ###################################################################
 
 	# Memeriksa file OoklaServer
