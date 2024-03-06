@@ -15,8 +15,8 @@ fi
 sudo mkdir -p /etc/letsencrypt
 rm /etc/letsencrypt/dnscloudflare.ini
 sudo tee /etc/letsencrypt/dnscloudflare.ini > /dev/null <<END
-dns_cloudflare_email = $EmailCloudFlare
-dns_cloudflare_api_key = $APICloudFlare
+#dns_cloudflare_email = $EmailCloudFlare
+dns_cloudflare_api_token = $APICloudFlare
 END
 sudo chmod 0600 /etc/letsencrypt/dnscloudflare.ini
 ##############################################################
