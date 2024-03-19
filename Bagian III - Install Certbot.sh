@@ -59,6 +59,9 @@ else
 	sudo snap set certbot trust-plugin-with-root=ok
 	sudo snap install certbot-dns-cloudflare
 	pip3 install cloudflare
+
+ firewall-cmd --zone=dmz --add-port=8080/tcp --permanent
+ firewall-cmd --reload
  
     }
 
