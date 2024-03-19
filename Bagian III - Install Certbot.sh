@@ -58,6 +58,18 @@ else
         sudo yum -y install python3-certbot-dns-cloudflare
         sudo snap set certbot trust-plugin-with-root=ok
 	sudo snap install certbot-dns-cloudflare
+
+curl https://bootstrap.pypa.io/pip/2.7/get-pip.py -o get-pip.py
+sudo python get-pip.py
+pip install --upgrade pip
+pip install cloudflare
+
+sudo yum install python3
+sudo yum install python3-pip
+sudo pip3 install cloudflare
+pip install cloudflare==2.11.8
+
+ 
     }
 
     # Fungsi untuk menjalankan instalasi Certbot untuk openSUSE
