@@ -29,10 +29,10 @@ else
         sudo snap refresh core
         sudo snap install --classic certbot
         sudo ln -s /snap/bin/certbot /usr/bin/certbot
-        sudo snap set certbot trust-plugin-with-root=ok
+        sudo apt install certbot -y
+	sudo snap set certbot trust-plugin-with-root=ok
         sudo snap install certbot-dns-cloudflare
-		sudo apt install certbot -y
-        sudo apt -y install python3-certbot-dns-cloudflare
+	sudo apt -y install python3-certbot-dns-cloudflare
 
     }
 
@@ -52,11 +52,11 @@ else
         sudo snap refresh core
         sudo snap install --classic certbot
         sudo ln -s /snap/bin/certbot /usr/bin/certbot
+	sudo yum install certbot -y
 	sudo yum install -y python2-cloudflare python2-certbot-dns-cloudflare
         sudo yum -y install python3-certbot-dns-cloudflare
         sudo snap set certbot trust-plugin-with-root=ok
-	sudo yum install certbot -y
-        sudo snap install certbot-dns-cloudflare
+	sudo snap install certbot-dns-cloudflare
     }
 
     # Fungsi untuk menjalankan instalasi Certbot untuk openSUSE
