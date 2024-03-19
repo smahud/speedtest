@@ -53,6 +53,7 @@ else
         sudo snap install --classic certbot
         sudo ln -s /snap/bin/certbot /usr/bin/certbot
 	sudo yum install certbot -y
+ 	yum -y install python-pip
 	sudo yum install -y python2-cloudflare python2-certbot-dns-cloudflare
         sudo yum -y install python3-certbot-dns-cloudflare
         sudo snap set certbot trust-plugin-with-root=ok
