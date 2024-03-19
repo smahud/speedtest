@@ -43,32 +43,22 @@ else
         # Temukan instruksi untuk OS lain di sini: https://certbot.eff.org/instructions
 
         # Instal Certbot melalui Snap jika belum terinstal
-        sudo yum install epel-release -y
-        sudo yum install snapd -y
-        sudo systemctl enable --now snapd.socket
-        sudo ln -s /var/lib/snapd/snap /snap
+        yum install epel-release -y
+        yum install snapd -y
+        systemctl enable --now snapd.socket
+        ln -s /var/lib/snapd/snap /snap
         sleep 1
-        sudo snap install core
-        sudo snap refresh core
-        sudo snap install --classic certbot
-        sudo ln -s /snap/bin/certbot /usr/bin/certbot
-	sudo yum install certbot -y
- 	yum -y install python-pip
-	sudo yum install -y python2-cloudflare python2-certbot-dns-cloudflare
-        sudo yum -y install python3-certbot-dns-cloudflare
-        sudo snap set certbot trust-plugin-with-root=ok
+        snap install core
+        snap refresh core
+        snap install --classic certbot
+        ln -s /snap/bin/certbot /usr/bin/certbot
+	yum install certbot -y
+ 	yum install python3 -y
+ 	yum install python3-pip -y
+	yum install python3-certbot-dns-cloudflare -y
+	sudo snap set certbot trust-plugin-with-root=ok
 	sudo snap install certbot-dns-cloudflare
-
-curl https://bootstrap.pypa.io/pip/2.7/get-pip.py -o get-pip.py
-sudo python get-pip.py
-pip install --upgrade pip
-pip install cloudflare
-
-sudo yum install python3
-sudo yum install python3-pip
-sudo pip3 install cloudflare
-pip install cloudflare==2.11.8
-
+	pip3 install cloudflare
  
     }
 
