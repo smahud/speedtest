@@ -51,15 +51,25 @@ else
         snap install core
         snap refresh core
         snap install --classic certbot
+	sudo snap set certbot trust-plugin-with-root=ok
+	sudo snap install certbot-dns-cloudflare
         ln -s /snap/bin/certbot /usr/bin/certbot
+	
 	yum install certbot -y
  	yum install python3 -y
  	yum install python3-pip -y
-	yum install python3-certbot-dns-cloudflare -y
-	sudo snap set certbot trust-plugin-with-root=ok
-	sudo snap install certbot-dns-cloudflare
-	pip3 install cloudflare
+	yum install python-certbot-dns-cloudflare -y
+	
 
+	sudo yum -y install gcc libffi-devel python3-devel openssl-devel
+ 	sudo pip3 install --upgrade pip
+	sudo pip3 install setuptools_rust
+	sudo pip3 install cryptography
+	sudo pip3 install certbot-dns-cloudflare
+ 	pip3 install cloudflare
+
+
+ 	
  firewall-cmd --zone=dmz --add-port=8080/tcp --permanent
  firewall-cmd --reload
  
