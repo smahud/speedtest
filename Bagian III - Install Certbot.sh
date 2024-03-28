@@ -34,6 +34,7 @@ else
         sudo snap install certbot-dns-cloudflare
 	sudo apt -y install python-certbot-dns-cloudflare
  	sudo apt -y install python3-certbot-dns-cloudflare
+  	pip install cloudflare --root-user-action=ignore
 
     }
 
@@ -60,7 +61,6 @@ else
  	yum install python3 -y
  	yum install python3-pip -y
 	yum install python-certbot-dns-cloudflare -y
-	
 
 	sudo yum -y install gcc libffi-devel python3-devel openssl-devel
  	sudo pip3 install --upgrade pip
@@ -68,6 +68,7 @@ else
 	sudo pip3 install cryptography
 	sudo pip3 install certbot-dns-cloudflare
  	pip3 install cloudflare
+  	pip install cloudflare --root-user-action=ignore
 
 
  	
