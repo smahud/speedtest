@@ -7,6 +7,7 @@ if [ -f /etc/debian_version ]; then
     # Debian/Ubuntu
     sudo apt update > /dev/null 2>&1
     sudo apt install git -y > /dev/null 2>&1
+    apt autoremove -y
 elif [ -f /etc/redhat-release ]; then
     # RHL/CentOS
     if [ -f /etc/os-release ]; then
