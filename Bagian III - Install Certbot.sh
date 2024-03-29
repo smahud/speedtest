@@ -63,14 +63,11 @@ else
 	yum install python-certbot-dns-cloudflare -y
 
 	sudo yum -y install gcc libffi-devel python3-devel openssl-devel
- 	sudo pip3 install --upgrade pip
-	sudo pip3 install setuptools_rust
-	sudo pip3 install cryptography
-	sudo pip3 install certbot-dns-cloudflare
- 	pip3 install cloudflare
-  	pip install cloudflare --root-user-action=ignore
-
-
+ 	pip install --upgrade pip  --root-user-action=ignore
+  	pip install --upgrade certbot  --root-user-action=ignore
+	pip install cryptography  --root-user-action=ignore
+	pip install certbot-dns-cloudflare  --root-user-action=ignore
+ 	pip install cloudflare  --root-user-action=ignore
  	
  firewall-cmd --zone=dmz --add-port=8080/tcp --permanent
  firewall-cmd --reload
