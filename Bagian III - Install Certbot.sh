@@ -25,16 +25,18 @@ else
         # Instal Certbot melalui Snap jika belum terinstal
         sudo apt install snapd -y
         sleep 1
-        sudo snap install core
-        sudo snap refresh core
-        sudo snap install --classic certbot
-        sudo ln -s /snap/bin/certbot /usr/bin/certbot
-        sudo apt install certbot -y
-	sudo snap set certbot trust-plugin-with-root=ok
-        sudo snap install certbot-dns-cloudflare
-	sudo apt -y install python-certbot-dns-cloudflare
- 	sudo apt -y install python3-certbot-dns-cloudflare
-  	pip install cloudflare --root-user-action=ignore
+        snap install core
+        snap refresh core
+        snap install --classic certbot
+        ln -s /snap/bin/certbot /usr/bin/certbot
+        apt install certbot -y
+	snap set certbot trust-plugin-with-root=ok
+        snap install certbot-dns-cloudflare
+	
+ 	apt install certbot -y
+ 	apt install python3 -y
+ 	apt install python3-pip -y
+	pip install certbot-dns-cloudflare --root-user-action=ignore
 
     }
 
@@ -60,7 +62,7 @@ else
 	yum install certbot -y
  	yum install python3 -y
  	yum install python3-pip -y
-	yum install python-certbot-dns-cloudflare -y
+	pip install certbot-dns-cloudflare --root-user-action=ignore
 
 	sudo yum -y install gcc libffi-devel python3-devel openssl-devel
  	pip install --upgrade pip  --root-user-action=ignore
