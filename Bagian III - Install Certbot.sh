@@ -33,10 +33,9 @@ else
 	snap set certbot trust-plugin-with-root=ok
         snap install certbot-dns-cloudflare
 	
- 	apt install certbot -y
  	apt install python3 -y
  	apt install python3-pip -y
-	pip install certbot-dns-cloudflare --root-user-action=ignore
+	pip install certbot-dns-cloudflare
 
     }
 
