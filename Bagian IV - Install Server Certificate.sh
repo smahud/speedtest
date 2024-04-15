@@ -8,7 +8,7 @@ if [ "$ApakahPakaiCloudflare" == "Ya" ]; then
             echo "Sertifikat sudah ada dan masih berlaku. Melewati pembuatan sertifikat."
         else
             echo "Sertifikat tidak ditemukan atau kadaluarsa. Membuat sertifikat wildcard baru..."
-            sudo certbot certonly -d "*.$Domain"  \
+            sudo certbot certonly -d "*.$Domain" -d "$Domain"  \
                 --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/dnscloudflare.ini \
                 -n --agree-tos \
                 --email "administrator@$Domain"
