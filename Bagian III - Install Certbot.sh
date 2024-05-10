@@ -36,7 +36,7 @@ else
  	apt install python3 -y
  	apt install python3-pip -y
 	pip install certbot-dns-cloudflare
-
+	pip install --upgrade cloudflare==2.19.4
     }
 
     # Fungsi untuk menjalankan instalasi Certbot untuk CentOS/RHEL
