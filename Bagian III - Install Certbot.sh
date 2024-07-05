@@ -5,8 +5,6 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-
-
 certbot_installed() {
     command_exists certbot
 }
