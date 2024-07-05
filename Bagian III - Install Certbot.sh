@@ -6,7 +6,7 @@ command_exists() {
 }
 
 
-# Fungsi untuk memeriksa apakah Certbot sudah terinstal
+
 certbot_installed() {
     command_exists certbot
 }
