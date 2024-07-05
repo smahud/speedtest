@@ -2,6 +2,7 @@
 # Membuat perintah auto reload OoklaServer setiap pukul 00:00
 # Baris perintah yang ingin ditambahkan ke crontab
 source /root/speedtest/common_functions1.sh
+
 new_cron_line="0 0 * * * /root/ooklaserver.sh stop && /root/ooklaserver.sh install && /root/ooklaserver.sh start"
 
 # Mendapatkan isi crontab saat ini
@@ -11,6 +12,21 @@ existing_cron=$(crontab -l 2>/dev/null)
 if [[ ! $existing_cron =~ $new_cron_line ]]; then
     # Menambahkan baris perintah ke crontab
     (crontab -l 2>/dev/null; echo "$new_cron_line") | sort -u | crontab -
+    echo "Baris perintah berhasil ditambahkan ke crontab."
+else
+    echo "Baris perintah sudah ada dalam crontab. Tidak ada yang ditambahkan."
+fi
+
+
+new_cron_line2="@reboot /root/OoklaServer --daemon"
+
+# Mendapatkan isi crontab saat ini
+existing_cron2=$(crontab -l 2>/dev/null)
+
+# Memeriksa apakah baris perintah sudah ada dalam crontab
+if [[ ! $existing_cron2 =~ $new_cron_line2 ]]; then
+    # Menambahkan baris perintah ke crontab
+    (crontab -l 2>/dev/null; echo "$new_cron_line2") | sort -u | crontab -
     echo "Baris perintah berhasil ditambahkan ke crontab."
 else
     echo "Baris perintah sudah ada dalam crontab. Tidak ada yang ditambahkan."
