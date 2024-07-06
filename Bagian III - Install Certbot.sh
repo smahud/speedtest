@@ -36,7 +36,7 @@ else
 	
  	apt install python3 -y
  	apt install python3-pip -y
-  	apt install python3-certbot-dns-cloudflare
+  	apt install python3-certbot-dns-cloudflare -y
 	pip install --upgrade cloudflare==2.19.4
     }
 
