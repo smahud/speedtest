@@ -3,7 +3,7 @@
 # Baris perintah yang ingin ditambahkan ke crontab
 source /root/speedtest/common_functions1.sh
 
-new_cron_line="0 0 * * * /root/ooklaserver.sh stop && /root/ooklaserver.sh install && /root/ooklaserver.sh start"
+new_cron_line="0 0 * * * /root/ooklaserver.sh stop && /root/ooklaserver.sh install && /root/ooklaserver.sh restart"
 
 # Mendapatkan isi crontab saat ini
 existing_cron=$(crontab -l 2>/dev/null)
