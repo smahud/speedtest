@@ -5,7 +5,8 @@ echo "Sedang Update System"
 # Mendeteksi distribusi Linux yang digunakan
 if [ -f /etc/debian_version ]; then
     # Debian/Ubuntu
-    apt update && apt install nala -y && echo "alias apt='nala'" >> ~/.bashrc && source ~/.bashrc
+    apt update > /dev/null 2>&1 
+    apt install nala -y > /dev/null 2>&1
     apt install git -y > /dev/null 2>&1
     apt install curl -y > /dev/null 2>&1
     apt install tar -y > /dev/null 2>&1
