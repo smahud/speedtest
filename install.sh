@@ -10,6 +10,7 @@ if [ -f /etc/debian_version ]; then
     apt install curl -y > /dev/null 2>&1
     apt install tar -y > /dev/null 2>&1
     apt install wget -y > /dev/null 2>&1
+    apt install cron -y > /dev/null 2>&1
 elif [ -f /etc/redhat-release ]; then
     # RHL/CentOS
     if [ -f /etc/os-release ]; then
@@ -20,6 +21,7 @@ elif [ -f /etc/redhat-release ]; then
             yum install curl -y > /dev/null 2>&1
             yum install tar -y > /dev/null 2>&1
             yum install wget -y  > /dev/null 2>&1
+            yum install cron -y  > /dev/null 2>&1
         fi
     fi
 elif [ -f /etc/SuSE-release ]; then
