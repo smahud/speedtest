@@ -24,7 +24,7 @@ else
         # Temukan instruksi untuk OS lain di sini: https://certbot.eff.org/instructions
 
         # Instal Certbot melalui Snap jika belum terinstal
-        sudo apt install snapd -y
+        apt install snapd -y
         sleep 1
         snap install core
         snap refresh core
@@ -55,8 +55,8 @@ else
         snap install core
         snap refresh core
         snap install --classic certbot
-	sudo snap set certbot trust-plugin-with-root=ok
-	sudo snap install certbot-dns-cloudflare
+	snap set certbot trust-plugin-with-root=ok
+	snap install certbot-dns-cloudflare
         ln -s /snap/bin/certbot /usr/bin/certbot
 	
 	yum install certbot -y
@@ -64,7 +64,7 @@ else
  	yum install python3-pip -y
 	pip install certbot-dns-cloudflare --root-user-action=ignore
 
-	sudo yum -y install gcc libffi-devel python3-devel openssl-devel
+	yum -y install gcc libffi-devel python3-devel openssl-devel
  	pip install --upgrade pip
   	pip install --upgrade certbot
 	pip install cryptography
@@ -81,11 +81,11 @@ else
         # Temukan instruksi untuk OS lain di sini: https://certbot.eff.org/instructions
 
         # Instal Certbot melalui Zypper jika belum terinstal
-        sudo zypper install certbot
+        zypper install certbot
 
         # Instal plugin DNS CloudFlare jika belum terinstal
         if ! command_exists certbot-dns-cloudflare; then
-            sudo zypper install python3-certbot-dns-cloudflare
+            zypper install python3-certbot-dns-cloudflare
         fi
     }
 
