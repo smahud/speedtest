@@ -25,7 +25,6 @@ else
 
         # Instal Certbot melalui Snap jika belum terinstal
         apt install snapd -y
-        sleep 1
         snap install core
         snap refresh core
         snap install --classic certbot
