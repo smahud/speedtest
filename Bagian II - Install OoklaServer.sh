@@ -24,6 +24,7 @@ EOF
 
 cd 
 cp /root/speedtest/ooklaserver.sh /root/ooklaserver.sh
+/root/ooklaserver.sh install
 echo "OoklaServer berhasil di install"
 print_hash 30
 fi
