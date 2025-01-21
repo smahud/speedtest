@@ -7,7 +7,6 @@ print_hash 30
 else
 echo "OoklaServer tidak ditemukan. Menjalankan Perintah Instalasi OoklaServer"
 #/root/speedtest/serverinstall.sh (lawas, tidak dipakai)
-
 echo "Membuat file OoklaServer.properties "
 cat <<EOF | sudo tee /root/OoklaServer.properties > /dev/null
 OoklaServer.tcpPorts = 5060,8080
