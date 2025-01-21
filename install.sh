@@ -5,22 +5,22 @@ echo "Sedang Update System"
 # Mendeteksi distribusi Linux yang digunakan
 if [ -f /etc/debian_version ]; then
     # Debian/Ubuntu
-    sudo apt update > /dev/null 2>&1
-    sudo apt install git -y > /dev/null 2>&1
+    apt update > /dev/null 2>&1
+    apt install git -y > /dev/null 2>&1
 elif [ -f /etc/redhat-release ]; then
     # RHL/CentOS
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         if [ "$ID" == "rhel" ] || [ "$ID" == "centos" ]; then
             yum update -y > /dev/null 2>&1
-            sudo yum install git -y > /dev/null 2>&1
-                        sudo yum install tar -y > /dev/null 2>&1
-                        sudo yum install wget -y  > /dev/null 2>&1
+            yum install git -y > /dev/null 2>&1
+                        yum install tar -y > /dev/null 2>&1
+                        yum install wget -y  > /dev/null 2>&1
         fi
     fi
 elif [ -f /etc/SuSE-release ]; then
     # OpenSUSE
-    sudo zypper install git -y > /dev/null 2>&1
+    zypper install git -y > /dev/null 2>&1
 else
     echo "Distribusi Linux tidak didukung atau tidak dapat dideteksi."
     exit 1
