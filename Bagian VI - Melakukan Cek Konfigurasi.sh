@@ -72,23 +72,6 @@ else
 	exit 1
 fi
 
-
-# Memeriksa apakah rc.local sudah terbentuk dan berjalan
-if [ -f "/etc/rc.local" ]; then
-    echo "rc.local sudah ada."
-	echo "Melakukan cek status auto start"
-    if systemctl is-enabled rc-local | grep -iq "enabled"; then
-        echo "rc.local diaktifkan dan sedang berjalan."
-		echo "OoklaServer akan berjalan otomatis ketika system reboot atau start-up."
-    else
-        echo "rc.local tidak diaktifkan atau tidak sedang berjalan."
-    fi
-else
-    echo "rc.local tidak ada. Ulangi proses. Cek ulang konfigurasi"
-	print_hash 100
-	exit 1
-fi
-
 print_hash 50
 echo "SELAMAT!!!!!!!!!!!!"
 print_hash 50
