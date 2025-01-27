@@ -2,7 +2,7 @@
 # Membuat perintah auto reload OoklaServer setiap pukul 00:00
 # Baris perintah yang ingin ditambahkan ke crontab
 source /root/speedtest/common_functions1.sh
-
+/root/ooklaserver.sh restart
 new_cron_line="0 0 * * * /root/ooklaserver.sh restart"
 
 # Mendapatkan isi crontab saat ini
