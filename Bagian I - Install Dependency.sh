@@ -12,9 +12,9 @@ else
     exit 1
 fi
 # Sumberkan data.ini
-sudo mkdir -p /etc/letsencrypt
+mkdir -p /etc/letsencrypt
 rm /etc/letsencrypt/dnscloudflare.ini
-sudo tee /etc/letsencrypt/dnscloudflare.ini > /dev/null <<END
+tee /etc/letsencrypt/dnscloudflare.ini > /dev/null <<END
 #dns_cloudflare_email = $EmailCloudFlare
 dns_cloudflare_api_token = $APICloudFlare
 END
