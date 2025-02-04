@@ -6,25 +6,30 @@ echo "OoklaServer sudah terinstal. Melewati ke Bagian II."
 print_hash 30
 else
 echo "OoklaServer tidak ditemukan. Menjalankan Perintah Instalasi OoklaServer"
-#/root/speedtest/serverinstall.sh (lawas, tidak dipakai)
-echo "Membuat file OoklaServer.properties "
-cat <<EOF | sudo tee /root/OoklaServer.properties > /dev/null
-OoklaServer.tcpPorts = 5060,8080
-OoklaServer.udpPorts = 5060,8080
-OoklaServer.useIPv6 = true
-OoklaServer.allowedDomains = *.ookla.com, *.speedtest.net
-OoklaServer.enableAutoUpdate = true
-OoklaServer.ssl.useLetsEncrypt = true
-logging.loggers.app.name = Application
-logging.loggers.app.channel.class = ConsoleChannel
-logging.loggers.app.channel.pattern = %Y-%m-%d %H:%M:%S [%P - %I] [%p] %t
-logging.loggers.app.level = information
-EOF
 
+#/root/speedtest/serverinstall.sh (lawas, tidak dipakai)
+#echo "Membuat file OoklaServer.properties "
+#cat <<EOF | sudo tee /root/OoklaServer.properties > /dev/null
+#OoklaServer.tcpPorts = 5060,8080
+#OoklaServer.udpPorts = 5060,8080
+#OoklaServer.useIPv6 = true
+#OoklaServer.allowedDomains = *.ookla.com, *.speedtest.net
+#OoklaServer.enableAutoUpdate = true
+#OoklaServer.ssl.useLetsEncrypt = true
+#logging.loggers.app.name = Application
+#logging.loggers.app.channel.class = ConsoleChannel
+#logging.loggers.app.channel.pattern = %Y-%m-%d %H:%M:%S [%P - %I] [%p] %t
+#logging.loggers.app.level = information
+#EOF
 
 cd 
 cp /root/speedtest/ooklaserver.sh /root/ooklaserver.sh
 /root/ooklaserver.sh install
+
+sed -i '/^# OoklaServer\.allowedDomains = \*\.ookla\.com, \*\.speedtest\.net/s/^# //' /root/OoklaServer.properties && \
+sed -i '/^# OoklaServer\.enableAutoUpdate/s/^# //' /root/OoklaServer.properties && \
+sed -i '/^# OoklaServer\.ssl\.useLetsEncrypt/s/^# //' /root/OoklaServer.properties
+
 echo "OoklaServer berhasil di install"
 print_hash 30
 fi
