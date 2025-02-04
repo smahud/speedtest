@@ -71,7 +71,7 @@ else
 	print_hash 100
 	exit 1
 fi
-ooklaserver.sh restart
+/root/ooklaserver.sh restart
 print_hash 50
 echo "SELAMAT!!!!!!!!!!!!"
 print_hash 50
