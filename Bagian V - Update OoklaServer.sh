@@ -15,7 +15,7 @@ else
     if pgrep -x "OoklaServer" > /dev/null; then
 		echo "#Percobaan 2 - Menggunakan pkill -f#"
         echo "OoklaServer sedang berjalan. Menghentikan OoklaServer..."
-        sudo pkill -f "OoklaServer"
+         pkill -f "OoklaServer"
     else
         echo "OoklaServer sudah berhenti. Melanjutkan dengan skrip..."
         sleep 2
@@ -23,7 +23,7 @@ else
         if pgrep -x "OoklaServer" > /dev/null; then
 			echo "Percobaan 3 - Menggunakan kill -9"
             echo "OoklaServer sedang berjalan. Menghentikan OoklaServer..."
-            sudo pkill -9 -f "OoklaServer"
+             pkill -9 -f "OoklaServer"
         else
             echo "OoklaServer sudah berhenti. Melanjutkan dengan skrip..."
             sleep 2
@@ -33,14 +33,14 @@ fi
 
 
 # Ganti domain dalam OoklaServer.properties
-sudo sed -i 's|openSSL.server.certificateFile = /etc/letsencrypt/live/[^/]\+/fullchain.pem||' /root/OoklaServer.properties
-sudo sed -i 's|openSSL.server.privateKeyFile = /etc/letsencrypt/live/[^/]\+/privkey.pem||' /root/OoklaServer.properties
+ sed -i 's|openSSL.server.certificateFile = /etc/letsencrypt/live/[^/]\+/fullchain.pem||' /root/OoklaServer.properties
+ sed -i 's|openSSL.server.privateKeyFile = /etc/letsencrypt/live/[^/]\+/privkey.pem||' /root/OoklaServer.properties
 sed -i '/OoklaServer.ssl.useLetsEncrypt = true/d' OoklaServer.properties
 
 
 # Tambahkan baris Certificate baru ke dalam file OoklaServer.properties
-echo "openSSL.server.certificateFile = /etc/letsencrypt/live/$Domain/fullchain.pem" | sudo tee -a /root/OoklaServer.properties > /dev/null
-echo "openSSL.server.privateKeyFile = /etc/letsencrypt/live/$Domain/privkey.pem" | sudo tee -a /root/OoklaServer.properties > /dev/null
+echo "openSSL.server.certificateFile = /etc/letsencrypt/live/$Domain/fullchain.pem" |  tee -a /root/OoklaServer.properties > /dev/null
+echo "openSSL.server.privateKeyFile = /etc/letsencrypt/live/$Domain/privkey.pem" |  tee -a /root/OoklaServer.properties > /dev/null
 echo "File OoklaServer.properties sudah ter update."
 
 ###################################################################
