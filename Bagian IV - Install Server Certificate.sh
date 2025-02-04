@@ -4,22 +4,22 @@ source /root/data.ini
 if [ "$ApakahPakaiCloudflare" == "Ya" ]; then
     if [ "$ApakahDomainWildcard" == "Ya" ]; then
         # Jika Wildcard dan menggunakan Cloudflare
-        if sudo certbot certificates --domain "*.$Domain" | grep -iq "Expiry Date"; then
+        if  certbot certificates --domain "*.$Domain" | grep -iq "Expiry Date"; then
             echo "Sertifikat sudah ada dan masih berlaku. Melewati pembuatan sertifikat."
         else
             echo "Sertifikat tidak ditemukan atau kadaluarsa. Membuat sertifikat wildcard baru..."
-            sudo certbot certonly -d "*.$Domain" -d "$Domain"  \
+             certbot certonly -d "*.$Domain" -d "$Domain"  \
                 --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/dnscloudflare.ini \
                 -n --agree-tos \
                 --email "administrator@$Domain"
         fi
     else
         # Jika bukan Wildcard dan menggunakan Cloudflare
-        if sudo certbot certificates --domain "$Domain" | grep -iq "Expiry Date"; then
+        if  certbot certificates --domain "$Domain" | grep -iq "Expiry Date"; then
             echo "Sertifikat sudah ada dan masih berlaku. Melewati pembuatan sertifikat."
         else
             echo "Sertifikat tidak ditemukan atau kadaluarsa. Membuat sertifikat baru..."
-            sudo certbot certonly -d "$Domain" \
+             certbot certonly -d "$Domain" \
                 --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/dnscloudflare.ini \
                 -n --agree-tos \
                 --email "administrator@$Domain"
@@ -29,20 +29,20 @@ else
     # Jika bukan Cloudflare
     if [ "$ApakahDomainWildcard" == "Ya" ]; then
         # Jika Wildcard tapi bukan Cloudflare
-        if sudo certbot certificates --domain "*.$Domain" | grep -iq "Expiry Date"; then
+        if  certbot certificates --domain "*.$Domain" | grep -iq "Expiry Date"; then
             echo "Sertifikat sudah ada dan masih berlaku. Melewati pembuatan sertifikat wildcard."
         else
             echo "Sertifikat tidak ditemukan atau kadaluarsa. Membuat sertifikat wildcard baru..."
-            sudo certbot certonly --manual --preferred-challenges=dns -d "*.$Domain" \
+             certbot certonly --manual --preferred-challenges=dns -d "*.$Domain" \
                 --agree-tos --email "administrator@trisuladata.net.id" 
         fi
     else
         # Jika bukan Wildcard dan bukan Cloudflare
-        if sudo certbot certificates --domain "$Domain" | grep -iq "Expiry Date"; then
+        if  certbot certificates --domain "$Domain" | grep -iq "Expiry Date"; then
             echo "Sertifikat sudah ada dan masih berlaku. Melewati pembuatan sertifikat."
         else
             echo "Sertifikat tidak ditemukan atau kadaluarsa. Membuat sertifikat baru..."
-            sudo certbot certonly --standalone --domain $Domain \
+             certbot certonly --standalone --domain $Domain \
                 -n --agree-tos --preferred-challenges http \
                 --email "administrator@$Domain"
         fi
