@@ -19,3 +19,4 @@ tee /etc/letsencrypt/dnscloudflare.ini > /dev/null <<END
 dns_cloudflare_api_token = $APICloudFlare
 END
 ##############################################################
+chmod 600 /etc/letsencrypt/dnscloudflare.ini
