@@ -5,6 +5,7 @@ echo "Sedang Update System"
 # Mendeteksi distribusi Linux yang digunakan
 if [ -f /etc/debian_version ]; then
     # Debian/Ubuntu
+    echo "OS Terdeteksi Sebagai Turunan Debian/Ubuntu"
     apt update > /dev/null 2>&1 
     apt install nala -y > /dev/null 2>&1
     apt install git -y > /dev/null 2>&1
@@ -12,19 +13,24 @@ if [ -f /etc/debian_version ]; then
     apt install tar -y > /dev/null 2>&1
     apt install wget -y > /dev/null 2>&1
     apt install cron -y > /dev/null 2>&1
+    apt install jq -y > /dev/null 2>&1
     echo "Sukses Install App Pendukung"
+    print_hash 30
 elif [ -f /etc/redhat-release ]; then
     # RHL/CentOS
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         if [ "$ID" == "rhel" ] || [ "$ID" == "centos" ]; then
+            echo "OS Terdeteksi Sebagai Turunan RHL/CenOS"
             yum update -y > /dev/null 2>&1
             yum install git -y > /dev/null 2>&1
             yum install curl -y > /dev/null 2>&1
             yum install tar -y > /dev/null 2>&1
             yum install wget -y  > /dev/null 2>&1
             yum install cron -y  > /dev/null 2>&1
+            yum install jq -y > /dev/null 2>&1
             echo "Sukses Install App Pendukung"
+            print_hash 30
         fi
     fi
 elif [ -f /etc/SuSE-release ]; then
