@@ -15,7 +15,7 @@ if [ -f /etc/debian_version ]; then
     apt install cron -y > /dev/null 2>&1
     apt install jq -y > /dev/null 2>&1
     echo "Sukses Install App Pendukung"
-    print_hash 30
+
 elif [ -f /etc/redhat-release ]; then
     # RHL/CentOS
     if [ -f /etc/os-release ]; then
@@ -30,7 +30,7 @@ elif [ -f /etc/redhat-release ]; then
             yum install cron -y  > /dev/null 2>&1
             yum install jq -y > /dev/null 2>&1
             echo "Sukses Install App Pendukung"
-            print_hash 30
+
         fi
     fi
 elif [ -f /etc/SuSE-release ]; then
