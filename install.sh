@@ -15,7 +15,7 @@ if [ -f /etc/debian_version ]; then
     apt install cron -y > /dev/null 2>&1
     apt install jq -y > /dev/null 2>&1
     echo "Sukses Install App Pendukung"
-
+fi
 elif [ -f /etc/redhat-release ]; then
     # RHL/CentOS
     if [ -f /etc/os-release ]; then
