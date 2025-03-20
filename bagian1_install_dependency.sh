@@ -14,7 +14,7 @@ fi
 # Install Speedtest For Test
 mkdir -p /root/tmp
 wget -O /tmp/speedtest.tgz https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz
-tar -xvzf /tmp/speedtest.tgz -C /usr/local/bin --strip-components=1 speedtest
+tar -xvzf /tmp/speedtest.tgz -C /usr/local/bin speedtest
 chmod a+x /usr/local/bin/speedtest
 
 # Sumberkan data.ini
