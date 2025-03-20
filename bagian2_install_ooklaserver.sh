@@ -24,7 +24,7 @@ echo "OoklaServer tidak ditemukan. Menjalankan Perintah Instalasi OoklaServer"
 
 cd 
 cp /root/speedtest/ooklaserver.sh /root/ooklaserver.sh
-/root/ooklaserver.sh install
+/root/ooklaserver.sh install -f
 
 sed -i '/^# OoklaServer\.allowedDomains = \*\.ookla\.com, \*\.speedtest\.net/s/^# //' /root/OoklaServer.properties && \
 sed -i '/^# OoklaServer\.enableAutoUpdate/s/^# //' /root/OoklaServer.properties && \
