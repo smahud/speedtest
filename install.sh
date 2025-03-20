@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
+
 echo "Sedang Update System"
+
 # Mendeteksi distribusi Linux yang digunakan
 if [ -f /etc/debian_version ]; then
     # Debian/Ubuntu
@@ -9,6 +11,7 @@ if [ -f /etc/debian_version ]; then
     apt install git curl tar wget cron jq -y > /dev/null 2>&1
     echo "Sukses Install App Pendukung"
     sleep 5
+
 elif [ -f /etc/redhat-release ]; then
     . /etc/os-release
     if [[ "$ID" == "rhel" || "$ID" == "centos" ]]; then
@@ -23,6 +26,14 @@ elif grep -qi "opensuse" /etc/os-release; then
     # OpenSUSE
     echo "OS Terdeteksi Sebagai OpenSUSE"
     zypper install git curl tar wget cron jq -y > /dev/null 2>&1
+    echo "Sukses Install App Pendukung"
+    sleep 5
+
+elif grep -qi "alpine" /etc/os-release; then
+    # Alpine Linux
+    echo "OS Terdeteksi Sebagai Alpine Linux"
+    apk update > /dev/null 2>&1
+    apk add git curl tar wget cron jq > /dev/null 2>&1
     echo "Sukses Install App Pendukung"
     sleep 5
 
