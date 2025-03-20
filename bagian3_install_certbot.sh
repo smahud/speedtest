@@ -65,7 +65,8 @@ else
     # Fungsi untuk menjalankan instalasi Certbot untuk Alpine
     install_certbot_alpine() {
         apk update
-        apk add certbot py3-certbot-dns-cloudflare
+        apk add certbot certbot-dns-cloudflare
+
     }
 
     # Tentukan OS dan jalankan fungsi yang sesuai
