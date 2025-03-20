@@ -48,7 +48,7 @@ echo "File OoklaServer.properties sudah ter update."
 	# Memeriksa file OoklaServer
 	echo "Malakukan Update Service OoklaServer..."
 	/root/ooklaserver.sh stop
-	/root/ooklaserver.sh install
+	/root/ooklaserver.sh install -f
 	/root/ooklaserver.sh restart
 	rm OoklaServer.properties.default
 	rm OoklaServer.pid
