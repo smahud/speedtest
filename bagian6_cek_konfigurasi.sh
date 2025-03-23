@@ -21,7 +21,19 @@ if [[ "$OS" == "debian" || "$OS" == "centos" || "$OS" == "opensuse" ]]; then
     (crontab -l 2>/dev/null; echo "0 0 * * * /root/ooklaserver.sh restart") | sort -u | crontab -
     (crontab -l 2>/dev/null; echo "@reboot /root/OoklaServer --daemon") | sort -u | crontab -
 elif [ "$OS" == "alpine" ]; then
-    echo "Menggunakan OpenRC, tidak perlu crontab untuk @reboot."
+    echo "Menggunakan cronie di Alpine Linux..."
+
+    # Pastikan cronie terinstal
+    if ! command -v crond &> /dev/null; then
+        apk add cronie
+    fi
+
+    # Aktifkan cronie saat boot
+    rc-update add crond
+    rc-service crond start
+
+    # Tambahkan crontab khusus Alpine
+    (crontab -l 2>/dev/null; echo "0 0 * * * /root/ooklaserver.sh restart") | sort -u | crontab -
 fi
 
 # Jika menggunakan Alpine OS, buat service untuk OpenRC
