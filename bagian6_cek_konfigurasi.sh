@@ -1,91 +1,80 @@
-# Bagian VI
-# Membuat perintah auto reload OoklaServer setiap pukul 00:00
-# Baris perintah yang ingin ditambahkan ke crontab
-source /root/speedtest/common_functions1.sh
-/root/ooklaserver.sh restart
-new_cron_line="0 0 * * * /root/ooklaserver.sh restart"
+#!/bin/bash
 
-# Mendapatkan isi crontab saat ini
-existing_cron=$(crontab -l 2>/dev/null)
-
-# Memeriksa apakah baris perintah sudah ada dalam crontab
-if [[ ! $existing_cron =~ $new_cron_line ]]; then
-    # Menambahkan baris perintah ke crontab
-    (crontab -l 2>/dev/null; echo "$new_cron_line") | sort -u | crontab -
-    echo "Baris perintah berhasil ditambahkan ke crontab."
+# Deteksi sistem operasi
+if [ -f "/etc/alpine-release" ]; then
+    OS="alpine"
+elif [ -f "/etc/debian_version" ]; then
+    OS="debian"
+elif [ -f "/etc/redhat-release" ]; then
+    OS="centos"
+elif [ -f "/etc/os-release" ] && grep -qi "opensuse" /etc/os-release; then
+    OS="opensuse"
 else
-    echo "Baris perintah sudah ada dalam crontab. Tidak ada yang ditambahkan."
+    echo "Sistem operasi tidak dikenali. Skrip dihentikan."
+    exit 1
 fi
 
+echo "Sistem operasi terdeteksi: $OS"
 
-new_cron_line2="@reboot /root/OoklaServer --daemon"
-
-# Mendapatkan isi crontab saat ini
-existing_cron2=$(crontab -l 2>/dev/null)
-
-# Memeriksa apakah baris perintah sudah ada dalam crontab
-if [[ ! $existing_cron2 =~ $new_cron_line2 ]]; then
-    # Menambahkan baris perintah ke crontab
-    (crontab -l 2>/dev/null; echo "$new_cron_line2") | sort -u | crontab -
-    echo "Baris perintah berhasil ditambahkan ke crontab."
-else
-    echo "Baris perintah sudah ada dalam crontab. Tidak ada yang ditambahkan."
+# Menambahkan crontab untuk auto restart setiap pukul 00:00 dan saat reboot
+if [[ "$OS" == "debian" || "$OS" == "centos" || "$OS" == "opensuse" ]]; then
+    (crontab -l 2>/dev/null; echo "0 0 * * * /root/ooklaserver.sh restart") | sort -u | crontab -
+    (crontab -l 2>/dev/null; echo "@reboot /root/OoklaServer --daemon") | sort -u | crontab -
+elif [ "$OS" == "alpine" ]; then
+    echo "Menggunakan OpenRC, tidak perlu crontab untuk @reboot."
 fi
 
+# Jika menggunakan Alpine OS, buat service untuk OpenRC
+if [ "$OS" == "alpine" ]; then
+    echo "Menyiapkan service untuk OpenRC..."
+    cat <<EOF > /etc/init.d/ooklaserver
+#!/sbin/openrc-run
 
-# Memeriksa apakah OoklaServer sedang berjalan
-print_hash 30
-echo "Memerikasa apakah OoklaServer sudah berjalan didalam system."
-sleep 3
+name="OoklaServer"
+description="Ookla Speedtest Server"
+command="/root/OoklaServer"
+command_args="--daemon"
+pidfile="/var/run/ooklaserver.pid"
+
+depend() {
+    need net
+}
+EOF
+
+    chmod +x /etc/init.d/ooklaserver
+    rc-update add ooklaserver default
+    rc-service ooklaserver start
+fi
+
+# Memeriksa apakah OoklaServer berjalan
+echo "Memeriksa status OoklaServer..."
 if pgrep -x "OoklaServer" > /dev/null; then
-    echo "OoklaServer sedang berjalan."
+    echo "OoklaServer berjalan."
 
-    # Memeriksa ketersediaan akses dari IP public dan port 8080...
-    echo "Memeriksa ketersediaan akses dari IP public dan port 8080..."
-
-    # Memberikan waktu untuk proses
-    sleep 2
-
-    # Mendapatkan IP public dari PC yang sedang berjalan (hanya IPv4)
-    public_ip=$(curl -4 -s https://api64.ipify.org?format=text)
-
-    # Memeriksa apakah IP public berhasil didapatkan
-    if [ -n "$public_ip" ]; then
-        # Melakukan curl ke IP public dan port 8080 untuk memastikan OoklaServer berjalan
-        result=$(curl -4 -s "http://$public_ip:8080" || echo "Failed")
-
-        # Memeriksa hasil curl
-        if [ "$result" == "<html><head><title>OoklaServer</title></head><body><h1>OoklaServer</h1><p>It worked!<br /></p></body></html>" ]; then
-            echo "OoklaServer dapat diakses melalui IP public $public_ip pada port 8080."
-			sleep 2
-        else
-            echo "OoklaServer tidak dapat diakses melalui IP public dan port 8080. Periksa konfigurasi atau jaringan Anda."
-			print_hash 50
-        fi
+    # Memeriksa akses dari IP publik di port 8080
+    public_ip=$(curl -4 -s https://api64.ipify.org)
+    if [ -n "$public_ip" ] && curl -4 -s "http://$public_ip:8080" | grep -q "<title>OoklaServer</title>"; then
+        echo "OoklaServer dapat diakses di $public_ip:8080."
     else
-        echo "Gagal mendapatkan IP public. Periksa koneksi internet atau konfigurasi API yang digunakan."
-		sleep 2
+        echo "OoklaServer tidak dapat diakses. Periksa konfigurasi jaringan."
     fi
 else
-    echo "OoklaServer tidak sedang berjalan. Periksa kembali konfigurasi. Semua proses di hentikan."
-	print_hash 100
-	exit 1
+    echo "OoklaServer tidak berjalan. Periksa konfigurasi!"
+    exit 1
 fi
+
+# Restart OoklaServer dan konfirmasi instalasi
 /root/ooklaserver.sh restart
-print_hash 50
-echo "SELAMAT!!!!!!!!!!!!"
-print_hash 50
-echo "Proses Install OoklaServer Sudah Selesai"
-print_hash 50
+
+# Pantun ala Installer 😆
 echo "Pulang ke desa jalannya mulus."
 sleep 1
 echo "Di perjalanan ban mobil bocor halus."
 sleep 1
 echo "Agar silaturahmi tidak terputus."
 sleep 1
-echo "Pinjam dulu lah seratus."
+echo "Pinjam dulu lah seratus. :D"
 sleep 1
-echo ":D"
-print_hash 50
-echo "Jangan Lupa Follow, Like, and Share"
-print_hash 50
+
+echo "Instalasi OoklaServer selesai!"
+echo "Jangan lupa Follow, Like, and Share!"
