@@ -30,8 +30,8 @@ else
         snap set certbot trust-plugin-with-root=ok
         snap install certbot-dns-cloudflare
         apt install -y python3 python3-pip python3-certbot-dns-cloudflare
-        pip install cloudflare==2.3.1 --break-system-packages
-        pip install --upgrade cloudflare --break-system-packages
+        #pip install cloudflare==2.3.1 --break-system-packages
+        #pip install --upgrade cloudflare --break-system-packages
     }
 
     # Fungsi untuk menjalankan instalasi Certbot untuk CentOS/RHEL
