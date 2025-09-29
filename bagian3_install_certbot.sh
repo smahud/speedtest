@@ -35,24 +35,19 @@ else
     }
 
     # Fungsi untuk menjalankan instalasi Certbot untuk CentOS/RHEL
-    install_certbot_centos() {
-        yum install -y epel-release
-        yum install -y snapd
-        systemctl enable --now snapd.socket
-        ln -s /var/lib/snapd/snap /snap
-        sleep 1
-        snap install core
-        snap refresh core
-        snap install --classic certbot
-        snap set certbot trust-plugin-with-root=ok
-        snap install certbot-dns-cloudflare
-        ln -s /snap/bin/certbot /usr/bin/certbot
-        yum install -y certbot python3 python3-pip gcc libffi-devel python3-devel openssl-devel
-        pip install --upgrade pip
-        pip install --upgrade certbot certbot-dns-cloudflare cryptography
-        firewall-cmd --zone=dmz --add-port=8080/tcp --permanent
-        firewall-cmd --reload
-    }
+install_certbot_centos() {
+    yum install -y epel-release
+    yum install -y snapd
+    systemctl enable --now snapd.socket
+    ln -s /var/lib/snapd/snap /snap || true
+    sleep 1
+    snap install core
+    snap refresh core
+    snap install --classic certbot
+    snap set certbot trust-plugin-with-root=ok
+    snap install certbot-dns-cloudflare
+    ln -sf /snap/bin/certbot /usr/bin/certbot
+}
 
     # Fungsi untuk menjalankan instalasi Certbot untuk openSUSE
     install_certbot_opensuse() {
