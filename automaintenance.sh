@@ -3,7 +3,7 @@
 echo "== Menyiapkan dan Mengupdate CRONTAB Speedtest =="
 
 # Ambil RegisteredSpeedtestURL dari data.ini
-SPEEDTEST_DATA="/root/speedtest/data.ini"
+SPEEDTEST_DATA="/root/data.ini"
 REGISTERED_URL=$(grep '^RegisteredSpeedtestURL=' "$SPEEDTEST_DATA" | cut -d'=' -f2 | tr -d '"')
 
 CRON1="0 * * * * sleep \$(( RANDOM % 50 ))m && speedtest -o $REGISTERED_URL"
