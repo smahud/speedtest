@@ -1,12 +1,21 @@
 #!/bin/bash
 
-# Jalankan Speedtest ke server ID dan ambil Result URL
-# Sesuaikan server ID 11111 kedalam ID yang terdapat di server saat ini
-result_url=$(/snap/speedtest/current/speedtest -s 11111 --accept-license --format=json | jq -r '.result.url')
+echo "== Menyiapkan dan Mengupdate CRONTAB Speedtest =="
 
-# Cek apakah result URL berhasil didapatkan
-if [ -n "$result_url" ]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Result URL: $result_url" >> /root/result.txt
-else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - Speedtest failed or no result URL found" >> /root/result.txt
-fi
+# Ambil RegisteredSpeedtestURL dari data.ini
+SPEEDTEST_DATA="/root/speedtest/data.ini"
+REGISTERED_URL=$(grep '^RegisteredSpeedtestURL=' "$SPEEDTEST_DATA" | cut -d'=' -f2 | tr -d '"')
+
+CRON1="0 * * * * sleep \$(( RANDOM % 50 ))m && speedtest -o $REGISTERED_URL"
+CRON2="*/5 * * * * systemd-run --scope -p CPUQuota=10% speedtest -o $REGISTERED_URL"
+
+# Backup dan update crontab root
+crontab -l 2>/dev/null | grep -v 'speedtest -o ' > /tmp/crontab.tmp
+
+echo "$CRON1" >> /tmp/crontab.tmp
+echo "$CRON2" >> /tmp/crontab.tmp
+
+crontab /tmp/crontab.tmp
+rm -f /tmp/crontab.tmp
+
+echo "Crontab berhasil diupdate dengan RegisteredSpeedtestURL: $REGISTERED_URL"
