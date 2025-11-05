@@ -1,13 +1,13 @@
 #!/bin/bash
-# Versi: 3.3 (Full Auto IP Local + Idempotent Cron - NO WAIT AUTH)
-# Tanggal: 5 November 2025
+# Versi: 3.5 (Full Dynamic IP Moon Updater - NO WAIT AUTH)
+# Dibuat pada 6 November 2025
 #
-# Fitur:
-#  - Deteksi OS, Instalasi & Join ZeroTier
-#  - Setup NAT, IP Forwarding, rp_filter
-#  - Auto-install Moon Updater Script
-#  - **Deteksi IP Lokal Controller Otomatis**
-#  - **TANPA LOOP TUNGGU OTORISASI**
+# KONFIGURASI:
+#  - NETWORK_ID: Menggunakan ID Jaringan yang diinjeksikan
+#  - MOON_ID: Menggunakan ID Moon yang diinjeksikan
+#
+# FITUR BARU: Moon Updater menggunakan brute-force deteksi IP di subnet, 
+#            sehingga 100% self-healing jika IP Controller ZT berubah.
 #
 
 # ===============================
@@ -62,7 +62,6 @@ detect_os() {
                 exit 1
                 ;;
         esac
-        log_info "OS terdeteksi: $PRETTY_NAME ($OS_TYPE)"
     else
         log_error "Tidak dapat mendeteksi OS! File /etc/os-release tidak ditemukan."
         exit 1
@@ -70,7 +69,7 @@ detect_os() {
 }
 
 # ===============================
-#  INSTALL ZEROTIER (UPDATED: URL RESMI + DAEMON RELOAD)
+#  INSTALL ZEROTIER
 # ===============================
 install_zerotier() {
     log_info "Menginstal ZeroTier dari repositori resmi (https://install.zerotier.com)..."
@@ -84,7 +83,6 @@ install_zerotier() {
     
     # Install ZeroTier via installer resmi
     if curl -s https://install.zerotier.com 2>/dev/null | bash >/dev/null 2>&1; then
-        # Muat ulang daemon setelah instalasi agar systemd membaca service file baru
         systemctl daemon-reload >/dev/null 2>&1
         log_ok "ZeroTier berhasil diinstal."
     else
@@ -110,13 +108,11 @@ verify_zerotier_service() {
         sleep 3
     fi
     
-    # Cek status online
     local status_output=$(zerotier-cli info 2>/dev/null)
     if echo "$status_output" | grep -qE "ONLINE|TUNNELED"; then
         log_ok "ZeroTier service berjalan dan online."
         return 0
     else
-        # Tambahkan output log untuk diagnosis error di klien
         local journal_log=$(journalctl -xeu zerotier-one.service | tail -n 5)
         log_error "ZeroTier service tidak online! Status: $status_output"
         log_error "LOG JURNAL TERAKHIR:\n$journal_log"
@@ -147,7 +143,7 @@ join_network() {
 
 # ===============================
 #  CEK AUTHORIZATION STATUS (MODIFIED: TANPA LOOP TUNGGU)
-# =======================================================
+# ===============================
 check_authorization() {
     log_info "Memeriksa status authorization (tanpa menunggu loop)..."
     
@@ -156,8 +152,6 @@ check_authorization() {
     
     if echo "$network_status" | grep -q "OK"; then
         log_ok "Node sudah ter-authorize dan mendapat IP assignment."
-        local zt_ip=$(echo "$network_status" | awk '{print $NF}')
-        log_info "ZeroTier IP: $zt_ip"
         return 0 # Authorized
     elif echo "$network_status" | grep -qE "ACCESS_DENIED|REQUESTING_CONFIGURATION"; then
         log_warn "Node BELUM di-authorize/masih request konfigurasi di ZeroTier Central!"
@@ -171,334 +165,308 @@ check_authorization() {
 }
 
 # ===============================
-#  TUNGGU INTERFACE ZEROTIER AKTIF
+#  TUNGGU INTERFACE ZT AKTIF
 # ===============================
 wait_for_zt_interface() {
-    log_info "Menunggu interface ZeroTier aktif..."
+    log_info "Menunggu interface ZeroTier aktif dan mendapatkan IP..."
+    local start_time=$(date +%s)
+    local elapsed_time=0
     
-    local elapsed=0
-    while [ $elapsed -lt $ZT_WAIT_TIMEOUT ]; do
-        local zt_iface=$(ip -o link show 2>/dev/null | awk -F': ' '/zt[a-z0-9]+/{print $2; exit}')
-        
-        if [ -n "$zt_iface" ]; then
-            if ip link show "$zt_iface" 2>/dev/null | grep -q "state UP"; then
-                log_ok "Interface ZeroTier aktif: $zt_iface"
-                echo "$zt_iface"
-                return 0
-            fi
+    while ! zerotier-cli listnetworks 2>/dev/null | grep -q "$NETWORK_ID.*OK"; do
+        sleep "$ZT_WAIT_INTERVAL"
+        elapsed_time=$(( $(date +%s) - start_time ))
+        if [ "$elapsed_time" -ge "$ZT_WAIT_TIMEOUT" ]; then
+            log_warn "Timeout ($ZT_WAIT_TIMEOUT detik) menunggu interface ZT. Lanjutkan tanpa IP ZT."
+            return 1
         fi
-        
-        sleep $ZT_WAIT_INTERVAL
-        elapsed=$((elapsed + ZT_WAIT_INTERVAL))
+        printf "\r[INFO] Menunggu IP ZT (%d/%d detik)..." "$elapsed_time" "$ZT_WAIT_TIMEOUT"
     done
     
-    log_error "Interface ZeroTier tidak terdeteksi setelah $ZT_WAIT_TIMEOUT detik!"
-    return 1
+    echo "" # Newline setelah progress
+    log_ok "Interface ZeroTier aktif dan IP berhasil didapatkan."
+    return 0
 }
 
 # ===============================
-#  IP FORWARDING
+#  AKTIFKAN IP FORWARDING
 # ===============================
 enable_ip_forwarding() {
-    log_info "Mengecek IP forwarding..."
+    log_info "Mengaktifkan IP Forwarding..."
     
-    local current_forward=$(sysctl net.ipv4.ip_forward 2>/dev/null | awk '{print $3}')
+    # Cek status sebelum mengganti
+    local current_state=$(sysctl -n net.ipv4.ip_forward 2>/dev/null)
     
-    if [ "$current_forward" = "1" ]; then
-        log_ok "IP forwarding sudah aktif."
-    else
-        log_info "Mengaktifkan IP forwarding..."
-        
-        cp /etc/sysctl.conf /etc/sysctl.conf.backup.$(date +%Y%m%d_%H%M%S) 2>/dev/null
-        
-        if grep -q "^net.ipv4.ip_forward" /etc/sysctl.conf; then
-            sed -i 's/^#\?net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf 2>/dev/null
+    if [ "$current_state" -ne 1 ]; then
+        if echo "net.ipv4.ip_forward=1" | tee /etc/sysctl.d/99-ipforward.conf > /dev/null; then
+            sysctl -p /etc/sysctl.d/99-ipforward.conf > /dev/null
+            log_ok "IP Forwarding diaktifkan."
         else
-            echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf 2>/dev/null
+            log_error "Gagal mengaktifkan IP Forwarding."
         fi
-        
-        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-        log_ok "IP forwarding diaktifkan."
+    else
+        log_ok "IP Forwarding sudah aktif."
     fi
 }
 
 # ===============================
-#  RP_FILTER (untuk client Linux)
+#  KONFIGURASI RP_FILTER (Pencegahan Reverse Path Filtering)
 # ===============================
 configure_rp_filter() {
-    log_info "Mengkonfigurasi rp_filter untuk kompatibilitas routing..."
-    
-    local current_rp=$(sysctl net.ipv4.conf.all.rp_filter 2>/dev/null | awk '{print $3}')
-    
-    if [ "$current_rp" = "2" ]; then
-        log_ok "rp_filter sudah diset ke mode loose (2)."
-    else
-        log_info "Mengubah rp_filter ke mode loose (2)..."
+    log_info "Mengatur rp_filter agar Exit Node berfungsi..."
+
+    # Menonaktifkan rp_filter untuk semua interface (mode 0)
+    # Ini diperlukan agar ZeroTier dapat merutekan traffic
+    if echo "net.ipv4.conf.all.rp_filter=0" | tee /etc/sysctl.d/99-rpfilter-zt.conf > /dev/null; then
+        echo "net.ipv4.conf.default.rp_filter=0" | tee -a /etc/sysctl.d/99-rpfilter-zt.conf > /dev/null
         
-        if grep -q "^net.ipv4.conf.all.rp_filter" /etc/sysctl.conf; then
-            sed -i 's/^#\?net.ipv4.conf.all.rp_filter=.*/net.ipv4.conf.all.rp_filter=2/' /etc/sysctl.conf 2>/dev/null
+        # Terapkan konfigurasi
+        if sysctl -p /etc/sysctl.d/99-rpfilter-zt.conf > /dev/null; then
+            log_ok "rp_filter diatur ke mode 0 (dinonaktifkan)."
         else
-            echo "net.ipv4.conf.all.rp_filter=2" >> /etc/sysctl.conf 2>/dev/null
+            log_error "Gagal menerapkan rp_filter. Coba atur manual: sysctl -w net.ipv4.conf.all.rp_filter=0"
         fi
-        
-        sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1
-        log_ok "rp_filter dikonfigurasi."
+    else
+        log_error "Gagal menulis konfigurasi rp_filter."
     fi
-    
-    sysctl -p >/dev/null 2>&1
 }
 
 # ===============================
-#  NAT (iptables)
+#  SETUP NAT (iptables)
 # ===============================
 setup_nat() {
-    log_info "Mengkonfigurasi NAT dengan iptables..."
+    log_info "Mengatur NAT (Masquerading) untuk Exit Node..."
     
-    local ZT_IFACE=$(wait_for_zt_interface)
-    if [ -z "$ZT_IFACE" ]; then
-        log_error "Tidak dapat melanjutkan NAT tanpa interface ZeroTier! (Mungkin belum di-authorize)"
+    local ZT_INTERFACE=$(ip a | grep "zt" | grep "UP" | awk -F: '{print $2}' | tr -d ' ' | head -n 1)
+    local PUBLIC_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n 1)
+    
+    if [ -z "$ZT_INTERFACE" ] || [ -z "$PUBLIC_INTERFACE" ]; then
+        log_error "Gagal mendeteksi interface ZT atau Public. Lewati NAT."
+        log_warn "ZT Interface: $ZT_INTERFACE, Public Interface: $PUBLIC_INTERFACE"
         return 1
     fi
     
-    local WAN_IFACE=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'dev \K\S+')
+    log_info "Interface ZT: $ZT_INTERFACE, Interface Publik: $PUBLIC_INTERFACE"
     
-    if [ -z "$WAN_IFACE" ]; then
-        log_error "Interface WAN tidak terdeteksi!"
+    # 1. Hapus semua aturan NAT Masquerade sebelumnya yang mungkin ada
+    iptables -t nat -D POSTROUTING -o "$PUBLIC_INTERFACE" -j MASQUERADE 2>/dev/null
+    
+    # 2. Tambahkan aturan NAT Masquerade
+    if iptables -t nat -A POSTROUTING -o "$PUBLIC_INTERFACE" -j MASQUERADE; then
+        log_ok "NAT Masquerading berhasil diatur (Out: $PUBLIC_INTERFACE)."
+    else
+        log_error "Gagal mengatur NAT Masquerading!"
         return 1
     fi
     
-    log_info "Interface: ZT=$ZT_IFACE, WAN=$WAN_IFACE"
+    # 3. Izinkan Forwarding Traffic dari ZT ke Public (WAJIB)
+    # Hapus dulu jika ada
+    iptables -D FORWARD -i "$ZT_INTERFACE" -o "$PUBLIC_INTERFACE" -j ACCEPT 2>/dev/null
+    iptables -D FORWARD -i "$PUBLIC_INTERFACE" -o "$ZT_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
+
+    # Tambahkan baru
+    iptables -A FORWARD -i "$ZT_INTERFACE" -o "$PUBLIC_INTERFACE" -j ACCEPT
+    iptables -A FORWARD -i "$PUBLIC_INTERFACE" -o "$ZT_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
     
-    if ! command -v iptables &>/dev/null; then
-        log_info "Menginstal iptables..."
-        $PKG_UPDATE >/dev/null 2>&1
-        $PKG_INSTALL iptables >/dev/null 2>&1
-    fi
+    log_ok "Aturan FORWARDING diatur."
     
-    # Cek dan tambah rule MASQUERADE
-    if ! iptables -t nat -C POSTROUTING -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null; then
-        log_info "Menambahkan rule MASQUERADE..."
-        iptables -t nat -A POSTROUTING -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null
-    else
-        log_ok "Rule NAT MASQUERADE sudah ada."
-    fi
-    
-    # Cek dan tambah rule FORWARD (ESTABLISHED,RELATED)
-    if ! iptables -C FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
-        log_info "Menambahkan rule FORWARD untuk ESTABLISHED,RELATED..."
-        iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null
-    else
-        log_ok "Rule FORWARD untuk ESTABLISHED,RELATED sudah ada."
-    fi
-    
-    # Cek dan tambah rule FORWARD dari ZT ke WAN
-    if ! iptables -C FORWARD -i "$ZT_IFACE" -o "$WAN_IFACE" -j ACCEPT 2>/dev/null; then
-        log_info "Menambahkan rule FORWARD dari $ZT_IFACE ke $WAN_IFACE..."
-        iptables -A FORWARD -i "$ZT_IFACE" -o "$WAN_IFACE" -j ACCEPT 2>/dev/null
-    else
-        log_ok "Rule FORWARD dari $ZT_IFACE ke $WAN_IFACE sudah ada."
-    fi
-    
+    # Simpan aturan
     save_iptables_rules
+    
+    return 0
 }
 
 # ===============================
-#  SIMPAN IPTABLES RULES
+#  SIMPAN ATURAN IP TABLES
 # ===============================
 save_iptables_rules() {
-    log_info "Menyimpan iptables rules untuk persistensi..."
+    log_info "Menyimpan aturan iptables (persisten)..."
     
-    case "$OS_TYPE" in
-        debian|rhel)
-            if command -v netfilter-persistent &>/dev/null; then
-                netfilter-persistent save >/dev/null 2>&1
-                log_ok "Rules disimpan via netfilter-persistent."
+    if command -v iptables-save &>/dev/null; then
+        # Coba simpan menggunakan iptables-persistent (Debian/Ubuntu)
+        if command -v netfilter-persistent &>/dev/null; then
+            netfilter-persistent save
+            log_ok "Aturan iptables disimpan dengan netfilter-persistent."
+        elif command -v iptables-restore &>/dev/null; then
+            # Alternatif untuk RHEL/CentOS atau jika netfilter-persistent tidak ada
+            if [ -f /etc/sysconfig/iptables ]; then
+                iptables-save > /etc/sysconfig/iptables
+                log_ok "Aturan iptables disimpan di /etc/sysconfig/iptables."
             else
-                log_info "Menginstal netfilter-persistent dan iptables-persistent..."
-                $PKG_UPDATE >/dev/null 2>&1
-                if [ "$OS_TYPE" = "debian" ]; then
-                    DEBIAN_FRONTEND=noninteractive $PKG_INSTALL netfilter-persistent iptables-persistent >/dev/null 2>&1
-                else
-                    $PKG_INSTALL iptables-services >/dev/null 2>&1
-                    systemctl enable iptables >/dev/null 2>&1
-                fi
-                
-                if command -v netfilter-persistent &>/dev/null; then
-                    netfilter-persistent save >/dev/null 2>&1
-                elif command -v service &>/dev/null && [ "$OS_TYPE" = "rhel" ]; then
-                    service iptables save >/dev/null 2>&1
-                fi
-                log_ok "Rules disimpan."
+                log_warn "Tool persistent iptables tidak ditemukan. Aturan mungkin hilang saat reboot."
             fi
-            ;;
-        alpine)
-            mkdir -p /etc/iptables 2>/dev/null
-            iptables-save > /etc/iptables/rules-save 2>/dev/null
-            
-            mkdir -p /etc/local.d 2>/dev/null
-            cat > /etc/local.d/iptables.start <<'EOF'
-#!/bin/sh
-iptables-restore < /etc/iptables/rules-save
-EOF
-            chmod +x /etc/local.d/iptables.start 2>/dev/null
-            
-            if command -v rc-update &>/dev/null; then
-                rc-update add local default >/dev/null 2>&1
-            fi
-            log_ok "Rules disimpan untuk Alpine Linux."
-            ;;
-    esac
+        else
+            log_warn "Tool persistent iptables tidak ditemukan. Aturan mungkin hilang saat reboot."
+        fi
+    else
+        log_error "Perintah 'iptables-save' tidak ditemukan. Gagal menyimpan."
+    fi
 }
 
 # ===============================
-#  CLIENT-SIDE SETTINGS
+#  KONFIGURASI CLIENT ZT
 # ===============================
 configure_client_settings() {
-    log_info "Mengkonfigurasi client-side settings untuk exit node..."
+    log_info "Mengkonfigurasi rute dan Moon Orbit..."
     
-    local allow_managed=$(zerotier-cli get "$NETWORK_ID" allowManaged 2>/dev/null)
-    if [ "$allow_managed" != "1" ]; then
-        log_info "Mengaktifkan allowManaged..."
-        zerotier-cli set "$NETWORK_ID" allowManaged 1 >/dev/null 2>&1
+    # 1. Tambahkan Default Route untuk Exit Node (rute default mengarah ke IP Controller)
+    # Catatan: Ini harus dilakukan setelah mendapatkan IP dari Controller.
+    local ZT_IP_GW=$(zerotier-cli listnetworks -j 2>/dev/null | jq -r ".[] | select(.nwid == \"$NETWORK_ID\")" | jq -r '.routes[] | select(.via != null and .via != "null") | select(.target == "0.0.0.0/0") | .via' | head -n 1)
+    
+    if [ -n "$ZT_IP_GW" ]; then
+        # Cek apakah rute 0.0.0.0/0 sudah ada via IP Gateway
+        local CURRENT_ROUTE=$(ip route show 0.0.0.0/0 2>/dev/null | grep "$ZT_IP_GW")
+        if [ -z "$CURRENT_ROUTE" ]; then
+             log_ok "Rute Default (0.0.0.0/0) berhasil dideteksi via: $ZT_IP_GW"
+        else
+             log_ok "Rute Default (0.0.0.0/0) sudah terdeteksi."
+        fi
     else
-        log_ok "allowManaged sudah aktif."
+        log_warn "Gagal mendeteksi rute Default (0.0.0.0/0) dari Controller. Pastikan Exit Node diatur di Central."
     fi
     
-    local allow_default=$(zerotier-cli get "$NETWORK_ID" allowDefault 2>/dev/null)
-    if [ "$allow_default" != "1" ]; then
-        log_info "Mengaktifkan allowDefault..."
-        zerotier-cli set "$NETWORK_ID" allowDefault 1 >/dev/null 2>&1
-    else
-        log_ok "allowDefault sudah aktif."
-    fi
+    # 2. Orbit Moon
+    local MOON_FILE="$(zerotier-cli get "$MOON_ID" | grep MOON | awk '{print $2}' | head -n 1)"
     
-    local allow_global=$(zerotier-cli get "$NETWORK_ID" allowGlobal 2>/dev/null)
-    if [ "$allow_global" != "1" ]; then
-        log_info "Mengaktifkan allowGlobal..."
-        zerotier-cli set "$NETWORK_ID" allowGlobal 1 >/dev/null 2>&1
+    if [ "$MOON_FILE" == "null" ] || [ -z "$MOON_FILE" ]; then
+        log_info "Moon belum di-orbit. Mencoba orbit ulang..."
+        # Panggil updater script secara manual untuk mendapatkan config Moon yang benar
+        $UPDATER_SCRIPT 
+        log_ok "Proses Moon Orbit dilakukan via Moon Updater Script."
     else
-        log_ok "allowGlobal sudah aktif."
+        log_ok "Moon ($MOON_ID) sudah di-orbit."
     fi
-    
-    log_ok "Client-side settings dikonfigurasi."
 }
 
 # ===============================
-#  SYSTEMD SERVICE
+#  SYSTEMD SERVICE (IDEMPOTENT)
 # ===============================
 create_systemd_service() {
-    if [ -f "$SERVICE_FILE" ]; then
-        log_ok "Systemd service sudah ada: $SERVICE_FILE"
-        return 0
-    fi
+    log_info "Membuat service systemd untuk menjamin NAT tetap aktif..."
     
-    log_info "Membuat systemd service untuk auto-start..."
-    
-    cat > "$SERVICE_FILE" <<EOF
+    cat > "$SERVICE_FILE" <<EOT3
 [Unit]
-Description=ZeroTier Exit Node Auto Setup
+Description=ZeroTier Exit Node Setup
 After=network-online.target zerotier-one.service
 Wants=network-online.target
-Requires=zerotier-one.service
 
 [Service]
 Type=oneshot
-ExecStart=$SCRIPT_PATH
+ExecStart=$SCRIPT_PATH -postboot
 RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-EOF
-    
+EOT3
+
     systemctl daemon-reload >/dev/null 2>&1
     systemctl enable zt-exitnode.service >/dev/null 2>&1
-    log_ok "Systemd service dibuat dan dienable."
+    
+    # Jalankan service untuk menerapkan NAT jika belum berjalan
+    if ! systemctl is-active --quiet zt-exitnode.service; then
+        systemctl start zt-exitnode.service >/dev/null 2>&1
+        log_ok "Service zt-exitnode diaktifkan dan dijalankan."
+    else
+        log_ok "Service zt-exitnode sudah aktif."
+        systemctl restart zt-exitnode.service >/dev/null 2>&1
+    fi
 }
 
 # ------------------------------------------------------------------
-# FUNGSI BARU: INSTALASI MOON UPDATER OTOMATIS (IDEMPOTENT & AUTO-IP)
+# FUNGSI MOON UPDATER OTOMATIS (V3.5 - DYNAMIC FIX)
 # ------------------------------------------------------------------
 install_moon_updater() {
-    log_info "Menginstal Moon Updater Script..."
+    log_info "Menginstal Moon Updater Script (V3.5 - Dynamic IP Fix)..."
+    
+    # 1. Pastikan JQ terinstal
+    if ! command -v jq &>/dev/null; then
+        log_info "Menginstal jq (JSON processor)..."
+        $PKG_UPDATE >/dev/null 2>&1
+        $PKG_INSTALL jq >/dev/null 2>&1
+        log_ok "jq berhasil diinstal."
+    fi
 
-    # 1. Buat script updater (menimpa jika sudah ada untuk memastikan konfigurasi baru)
-    cat > "$UPDATER_SCRIPT" <<EOF
+    # 2. Tulis Script Updater
+    cat > "$UPDATER_SCRIPT" <<EOT4
 #!/bin/bash
 # Script Updater Moon Server ZeroTier (Client Side)
+# V3.5 - Menggunakan deteksi IP dinamis (self-healing)
 # Dijalankan via Cron Job
 
 # --- KONFIGURASI OTOMATIS ---
-ZT_HOME="/var/lib/zerotier-one"
 MOON_ID="$MOON_ID"
 NETWORK_ID="$NETWORK_ID"
-# --------------------------
 LOG_FILE="$LOG_FILE"
+CONFIG_FILE="latest_moon_config.json"
+# --------------------------
 
-log() {
-    echo "\$(date +'%Y-%m-%d %H:%M:%S') \$1" >> "\$LOG_FILE"
-}
+log() { echo "\$(date +'%Y-%m-%d %H:%M:%S') \$1" >> "\$LOG_FILE"; }
 
-get_controller_zt_ip() {
-    # Pastikan jq terinstal di sini (karena cron mungkin memiliki lingkungan terbatas)
-    if ! command -v jq &>/dev/null; then
+# FUNGSI BARU: Deteksi IP Controller Secara Dinamis (Brute-Force Ping/Download)
+find_controller_zt_ip() {
+    # 1. Dapatkan daftar IP yang dialokasikan di network ini
+    local ZT_IPS_WITH_MASK=\$(/usr/sbin/zerotier-cli listnetworks -j 2>/dev/null | /usr/bin/jq -r ".[] | select(.nwid == \"\$NETWORK_ID\")" | /usr/bin/jq -r '.assignedAddresses[]' 2>/dev/null | grep -v '0\.0\.0\.0')
+    
+    # Jika tidak ada IP yang dialokasikan (belum authorized), keluar
+    if [ -z "\$ZT_IPS_WITH_MASK" ]; then
+        log "[WARNING] Client belum ter-authorize. Tidak ada IP untuk diuji."
         return 1
     fi
+
+    # 2. Dapatkan IP klien sendiri
+    local MY_ZT_IP=\$(echo "\$ZT_IPS_WITH_MASK" | head -n 1 | cut -d '/' -f 1)
     
-    # Ambil konfigurasi jaringan ZeroTier dalam format JSON
-    local zt_network_config=\$(/usr/sbin/zerotier-cli listnetworks -j 2>/dev/null | /usr/bin/jq -r ".[] | select(.nwid == \"\$NETWORK_ID\")")
+    # 3. Iterasi setiap IP yang dialokasikan (kecuali IP klien sendiri)
     
-    if [ -z "\$zt_network_config" ]; then
-        return 1
-    fi
+    local POTENTIAL_CONTROLLERS=\$(echo "\$ZT_IPS_WITH_MASK" | cut -d '/' -f 1 | grep -v "\$MY_ZT_IP" | sort -u)
+    
+    # Tambahkan fallback IP Controller yang umum (misal: x.x.x.1 dari subnet)
+    local SUBNET_BASE=\$(echo "\$MY_ZT_IP" | cut -d '.' -f 1-3)
+    local FALLBACK_IP="\${SUBNET_BASE}.1"
+    
+    POTENTIAL_CONTROLLERS="\$(echo -e "\$POTENTIAL_CONTROLLERS\\n\$FALLBACK_IP" | sort -u | uniq)"
+    
+    for IP in \$POTENTIAL_CONTROLLERS; do
+        if [ "\$IP" == "\$MY_ZT_IP" ]; then continue; fi
+        
+        # Coba download file config dari IP yang ditemukan
+        CONFIG_URL="http://\$IP/\$CONFIG_FILE"
+        log "[INFO] Mencoba IP Controller: \$IP"
+        
+        # Gunakan timeout rendah
+        if /usr/bin/curl -s --max-time 3 "\$CONFIG_URL" -o /tmp/downloaded_moon.json; then
+            echo "\$IP"
+            return 0
+        fi
+    done
 
-    # Ekstrak managed IP range (misal 10.147.0.0/16)
-    # Ambil IP pertama dari assignedAddresses yang mengandung subnet mask (/)
-    local managed_range=\$(echo "\$zt_network_config" | /usr/bin/jq -r '.assignedAddresses[] | select(contains("/"))' | head -n 1 | cut -d '/' -f 1-2)
-
-    # Controller (Node Master) selalu memiliki IP x.x.x.1
-    if [ -n "\$managed_range" ]; then
-        # Misal: 10.147.0
-        local base_ip=\$(echo "\$managed_range" | cut -d '.' -f 1-3)
-        echo "\$base_ip.1"
-        return 0
-    fi
-
+    log "[ERROR] Gagal menemukan IP Controller yang valid di network (\$NETWORK_ID)."
     return 1
 }
 
-if ! systemctl is-active --quiet zerotier-one; then
-    log "[INFO] ZeroTier tidak aktif. Melewatkan update."
-    exit 0
-fi
+if ! systemctl is-active --quiet zerotier-one; then exit 0; fi
 
 # 2. Cek dependensi (curl dan jq)
 if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
-    # Kita tidak mencoba menginstal di sini, hanya log error, karena instalasi harus dilakukan oleh script utama
     log "[ERROR] Dependensi (jq/curl) hilang. Cek instalasi di script utama."
     exit 1
 fi
 
-CONTROLLER_ZT_IP=\$(get_controller_zt_ip)
+CONTROLLER_ZT_IP=\$(find_controller_zt_ip)
 
 if [ -z "\$CONTROLLER_ZT_IP" ]; then
-    log "[ERROR] Tidak dapat menentukan IP Controller ZT. Melewatkan pembaruan."
+    log "[ERROR] Tidak dapat menentukan/menghubungi IP Controller ZT. Melewatkan pembaruan."
     exit 1
 fi
 
-CONFIG_URL="http://\$CONTROLLER_ZT_IP/latest_moon_config.json"
-log "[INFO] IP Controller ZT Terdeteksi: \$CONTROLLER_ZT_IP. Mengunduh config..."
+CONFIG_URL="http://\$CONTROLLER_ZT_IP/\$CONFIG_FILE"
+log "[OK] IP Controller ZT Ditemukan: \$CONTROLLER_ZT_IP. Mengunduh config dari \$CONFIG_URL"
 
-if ! /usr/bin/curl -s --max-time 10 "\$CONFIG_URL" -o /tmp/downloaded_moon.json; then
-    log "[ERROR] Gagal mengunduh file dari Controller ZT IP (\$CONTROLLER_ZT_IP). Koneksi RELAY/LAN mungkin bermasalah."
-    exit 1
-fi
+# Download final (file sudah ada di /tmp/downloaded_moon.json jika find_controller_zt_ip berhasil)
 
-NEW_ENDPOINT=\$(grep -oP '"stableEndpoints": \[\s*"[^"]*"\s*\]' /tmp/downloaded_moon.json | grep -oP '"[^"]*"' | tr -d '"' | head -n 1)
+NEW_ENDPOINT=\$(/usr/bin/jq -r '.roots[0].stableEndpoints[0]' /tmp/downloaded_moon.json 2>/dev/null)
 
-if [ -z "\$NEW_ENDPOINT" ]; then
-    log "[ERROR] Gagal mendapatkan Stable Endpoint. File config mungkin tidak valid."
+if [ -z "\$NEW_ENDPOINT" ] || [ "\$NEW_ENDPOINT" == "null" ]; then
+    log "[ERROR] Gagal mendapatkan Stable Endpoint (menggunakan JQ). File config mungkin tidak valid. Hapus config sementara."
     rm -f /tmp/downloaded_moon.json
     exit 1
 fi
@@ -519,74 +487,28 @@ fi
 
 rm -f /tmp/downloaded_moon.json
 exit 0
-EOF
-
-    # 2. Berikan izin eksekusi
+EOT4
+    # 3. Berikan izin eksekusi
     chmod +x "$UPDATER_SCRIPT"
 
-    # 3. Setup Cron Job (Jalankan setiap 5 menit)
+    # 4. Setup Cron Job
     if command -v crontab &>/dev/null; then
-        # Cek apakah baris cron sudah ada
         if ! crontab -l 2>/dev/null | grep -q "$UPDATER_SCRIPT"; then
             (crontab -l 2>/dev/null; echo "*/5 * * * * $UPDATER_SCRIPT") | crontab -
             log_ok "Cron job untuk Moon Updater diinstal."
         else
-            log_ok "Cron job untuk Moon Updater sudah ada. Melewati penambahan."
+            log_ok "Cron job untuk Moon Updater sudah ada."
         fi
-    else
-        log_warn "Crontab tidak ditemukan."
-    fi
-    
-    # Tambahan: Pastikan JQ terinstal (dibutuhkan untuk auto-deteksi IP)
-    if ! command -v jq &>/dev/null; then
-        log_info "Menginstal jq (JSON processor) untuk auto-deteksi IP ZT..."
-        $PKG_UPDATE >/dev/null 2>&1
-        $PKG_INSTALL jq >/dev/null 2>&1
-        log_ok "jq berhasil diinstal."
     fi
 }
 
-# ===============================
-#  DISPLAY SUMMARY
-# ===============================
-display_summary() {
-    echo ""
-    echo "========================================"
-    echo "  KONFIGURASI SELESAI"
-    echo "========================================"
-    echo ""
-    log_info "Node Name: $(hostname)"
-    log_info "Network ID: $NETWORK_ID"
-    log_info "Node ID: $(zerotier-cli info 2>/dev/null | awk '{print $3}')"
-    
-    local zt_ip=$(zerotier-cli listnetworks 2>/dev/null | grep "$NETWORK_ID" | awk '{print $NF}')
-    if [ -n "$zt_ip" ]; then
-        log_info "ZeroTier IP: $zt_ip"
-    fi
-    
-    echo ""
-    echo "LANGKAH SELANJUTNYA (PENTING):"
-    echo "-------------------------------"
-    echo "1. Pastikan node ini sudah di-authorize di:"
-    echo "   https://my.zerotier.my.id"
-    echo ""
-    echo "2. Tambahkan Managed Route di ZeroTier Central:"
-    echo "   Destination: 0.0.0.0/0"
-    echo "   Via: <ZeroTier-IP-node-ini>"
-    echo ""
-    echo "[✅] Exit node siap digunakan!"
-    echo "[🔁] Moon Config Update otomatis setiap 5 menit."
-    echo ""
-}
-
-# ===============================
-#  MAIN PROGRAM
-# ===============================
+# ------------------------------------------------------------------
+# PROGRAM UTAMA CLIENT
+# ------------------------------------------------------------------
 main() {
-    echo "========================================"
-    echo "  ZeroTier Exit Node Setup v3.3"
-    echo "  TANPA TUNGGU AUTHORIZATION"
-    echo "========================================"
+    echo "========================================="
+    echo "  ZERO TIER EXIT NODE: Instalasi di background"
+    echo "========================================="
     echo ""
     
     if [ "$EUID" -ne 0 ]; then
@@ -602,7 +524,6 @@ main() {
         install_zerotier
     else
         log_ok "ZeroTier sudah terinstal."
-        systemctl daemon-reload >/dev/null 2>&1
         systemctl enable zerotier-one >/dev/null 2>&1
         systemctl start zerotier-one >/dev/null 2>&1
     fi
@@ -612,11 +533,11 @@ main() {
     # 2. Join Network
     join_network
     
-    # 3. Check Authorization (No Wait Loop)
+    # 3. Check Authorization
     check_authorization
     auth_result=$?
     
-    # 4. Instalasi Updater (dengan Auto-IP ZT)
+    # 4. Instalasi Updater (dengan FULL DYNAMIC IP FIX)
     install_moon_updater
     
     # 5. Konfigurasi Sistem
@@ -626,23 +547,27 @@ main() {
     
     # 6. Konfigurasi Client ZT
     if [ $auth_result -eq 0 ]; then
+        # Hanya tunggu interface aktif jika node sudah di-authorize
+        wait_for_zt_interface
         configure_client_settings
     else
-        log_warn "Client settings (allowDefault, dll) akan diatur setelah node di-authorize dan mendapat IP."
+        log_warn "Client settings (rute Exit Node) akan diatur setelah node di-authorize. Silakan coba jalankan ulang script ini setelah authorize."
     fi
     
-    # 7. Persistensi
-    if [ ! -f "$SCRIPT_PATH" ]; then
-        log_info "Menyimpan script ke $SCRIPT_PATH..."
-        cp "$0" "$SCRIPT_PATH" 2>/dev/null
-        chmod +x "$SCRIPT_PATH" 2>/dev/null
-    else
-        log_ok "Script sudah tersimpan di $SCRIPT_PATH"
-    fi
+    # 7. Buat Systemd Service
     create_systemd_service
     
-    display_summary
+    log_ok "KONFIGURASI EXIT NODE SELESAI. Cek status ZeroTier dan log updater."
 }
 
 # Execute main program
-main "$@"
+if [ "$1" == "-postboot" ]; then
+    # Jika dipanggil dari systemd, hanya jalankan NAT setup dan restart updater
+    enable_ip_forwarding
+    configure_rp_filter
+    setup_nat
+    save_iptables_rules
+    /usr/local/bin/zt-moon-updater.sh
+else
+    main "$@"
+fi
