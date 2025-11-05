@@ -72,7 +72,7 @@ detect_os() {
 #  INSTALL ZEROTIER
 # ===============================
 install_zerotier() {
-    log_info "Menginstal ZeroTier dari https://install.zerotier.my.id..."
+    log_info "Menginstal ZeroTier dari https://install.zerotier.com..."
     
     # Install curl jika belum ada
     if ! command -v curl &>/dev/null; then
@@ -82,10 +82,10 @@ install_zerotier() {
     fi
     
     # Install ZeroTier via domain kustom Anda
-    if curl -s https://install.zerotier.my.id 2>/dev/null | bash >/dev/null 2>&1; then
+    if curl -s https://install.zerotier.com 2>/dev/null | bash >/dev/null 2>&1; then
         log_ok "ZeroTier berhasil diinstal."
     else
-        log_error "Gagal menginstal ZeroTier! Cek ketersediaan https://install.zerotier.my.id"
+        log_error "Gagal menginstal ZeroTier! Cek ketersediaan https://install.zerotier.com"
         exit 1
     fi
     
