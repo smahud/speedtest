@@ -1,5 +1,5 @@
 #!/bin/bash
-# Versi: 3.2 (Full Auto IP Local + Idempotent Cron)
+# Versi: 3.3 (Full Auto IP Local + Idempotent Cron - NO WAIT AUTH)
 # Tanggal: 5 November 2025
 #
 # Fitur:
@@ -7,6 +7,7 @@
 #  - Setup NAT, IP Forwarding, rp_filter
 #  - Auto-install Moon Updater Script
 #  - **Deteksi IP Lokal Controller Otomatis**
+#  - **TANPA LOOP TUNGGU OTORISASI**
 #
 
 # ===============================
@@ -69,10 +70,10 @@ detect_os() {
 }
 
 # ===============================
-#  INSTALL ZEROTIER
+#  INSTALL ZEROTIER (UPDATED: URL RESMI + DAEMON RELOAD)
 # ===============================
 install_zerotier() {
-    log_info "Menginstal ZeroTier dari https://install.zerotier.com..."
+    log_info "Menginstal ZeroTier dari repositori resmi (https://install.zerotier.com)..."
     
     # Install curl jika belum ada
     if ! command -v curl &>/dev/null; then
@@ -81,11 +82,13 @@ install_zerotier() {
         $PKG_INSTALL curl >/dev/null 2>&1
     fi
     
-    # Install ZeroTier via domain kustom Anda
+    # Install ZeroTier via installer resmi
     if curl -s https://install.zerotier.com 2>/dev/null | bash >/dev/null 2>&1; then
+        # Muat ulang daemon setelah instalasi agar systemd membaca service file baru
+        systemctl daemon-reload >/dev/null 2>&1
         log_ok "ZeroTier berhasil diinstal."
     else
-        log_error "Gagal menginstal ZeroTier! Cek ketersediaan https://install.zerotier.com"
+        log_error "Gagal menginstal ZeroTier! Cek koneksi internet."
         exit 1
     fi
     
@@ -113,7 +116,10 @@ verify_zerotier_service() {
         log_ok "ZeroTier service berjalan dan online."
         return 0
     else
+        # Tambahkan output log untuk diagnosis error di klien
+        local journal_log=$(journalctl -xeu zerotier-one.service | tail -n 5)
         log_error "ZeroTier service tidak online! Status: $status_output"
+        log_error "LOG JURNAL TERAKHIR:\n$journal_log"
         return 1
     fi
 }
@@ -140,42 +146,28 @@ join_network() {
 }
 
 # ===============================
-#  CEK AUTHORIZATION STATUS
-# ===============================
+#  CEK AUTHORIZATION STATUS (MODIFIED: TANPA LOOP TUNGGU)
+# =======================================================
 check_authorization() {
-    log_info "Memeriksa status authorization..."
+    log_info "Memeriksa status authorization (tanpa menunggu loop)..."
     
-    local max_attempts=20
-    local attempt=0
     local node_id=$(zerotier-cli info 2>/dev/null | awk '{print $3}')
+    local network_status=$(zerotier-cli listnetworks 2>/dev/null | grep "$NETWORK_ID")
     
-    while [ $attempt -lt $max_attempts ]; do
-        local network_status=$(zerotier-cli listnetworks 2>/dev/null | grep "$NETWORK_ID")
-        
-        if echo "$network_status" | grep -q "OK"; then
-            log_ok "Node sudah ter-authorize dan mendapat IP assignment."
-            local zt_ip=$(echo "$network_status" | awk '{print $NF}')
-            log_info "ZeroTier IP: $zt_ip"
-            return 0
-        elif echo "$network_status" | grep -q "ACCESS_DENIED"; then
-            if [ $attempt -eq 0 ]; then
-                log_warn "Node belum di-authorize di ZeroTier Central!"
-                log_warn "Silakan authorize node ini di https://my.zerotier.my.id"
-                log_info "Network ID: $NETWORK_ID"
-                log_info "Node ID: $node_id"
-            fi
-            log_warn "Menunggu authorization... ($((attempt+1))/$max_attempts)"
-        elif echo "$network_status" | grep -q "REQUESTING_CONFIGURATION"; then
-            log_info "Sedang request konfigurasi dari controller... ($((attempt+1))/$max_attempts)"
-        fi
-        
-        sleep 5
-        attempt=$((attempt+1))
-    done
-    
-    log_error "Node tidak mendapat authorization setelah $max_attempts percobaan!"
-    log_error "PENTING: Anda harus authorize node ini secara manual di ZeroTier Central."
-    return 1
+    if echo "$network_status" | grep -q "OK"; then
+        log_ok "Node sudah ter-authorize dan mendapat IP assignment."
+        local zt_ip=$(echo "$network_status" | awk '{print $NF}')
+        log_info "ZeroTier IP: $zt_ip"
+        return 0 # Authorized
+    elif echo "$network_status" | grep -qE "ACCESS_DENIED|REQUESTING_CONFIGURATION"; then
+        log_warn "Node BELUM di-authorize/masih request konfigurasi di ZeroTier Central!"
+        log_warn "LANJUTKAN instalasi Exit Node. Harap AUTHORIZE Node ID berikut secara manual:"
+        log_warn "Node ID: $node_id"
+        return 1 # Not Authorized, but continue
+    else
+        log_error "Status network tidak diketahui. Node ID: $node_id"
+        return 1
+    fi
 }
 
 # ===============================
@@ -264,7 +256,7 @@ setup_nat() {
     
     local ZT_IFACE=$(wait_for_zt_interface)
     if [ -z "$ZT_IFACE" ]; then
-        log_error "Tidak dapat melanjutkan tanpa interface ZeroTier!"
+        log_error "Tidak dapat melanjutkan NAT tanpa interface ZeroTier! (Mungkin belum di-authorize)"
         return 1
     fi
     
@@ -573,8 +565,8 @@ display_summary() {
     fi
     
     echo ""
-    echo "LANGKAH SELANJUTNYA:"
-    echo "--------------------"
+    echo "LANGKAH SELANJUTNYA (PENTING):"
+    echo "-------------------------------"
     echo "1. Pastikan node ini sudah di-authorize di:"
     echo "   https://my.zerotier.my.id"
     echo ""
@@ -592,8 +584,8 @@ display_summary() {
 # ===============================
 main() {
     echo "========================================"
-    echo "  ZeroTier Exit Node Setup v3.2"
-    echo "  SILENT MODE: Instalasi di background"
+    echo "  ZeroTier Exit Node Setup v3.3"
+    echo "  TANPA TUNGGU AUTHORIZATION"
     echo "========================================"
     echo ""
     
@@ -610,6 +602,7 @@ main() {
         install_zerotier
     else
         log_ok "ZeroTier sudah terinstal."
+        systemctl daemon-reload >/dev/null 2>&1
         systemctl enable zerotier-one >/dev/null 2>&1
         systemctl start zerotier-one >/dev/null 2>&1
     fi
@@ -619,7 +612,7 @@ main() {
     # 2. Join Network
     join_network
     
-    # 3. Check Authorization
+    # 3. Check Authorization (No Wait Loop)
     check_authorization
     auth_result=$?
     
@@ -635,7 +628,7 @@ main() {
     if [ $auth_result -eq 0 ]; then
         configure_client_settings
     else
-        log_warn "Client settings akan diatur setelah node di-authorize."
+        log_warn "Client settings (allowDefault, dll) akan diatur setelah node di-authorize dan mendapat IP."
     fi
     
     # 7. Persistensi
