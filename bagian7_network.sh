@@ -19,8 +19,8 @@ SERVICE_FILE="/etc/systemd/system/zt-exitnode.service"
 UPDATER_SCRIPT="/usr/local/bin/zt-moon-updater.sh"
 
 # --- KONFIGURASI KRITIS UNTUK AUTO-UPDATE MOON ---
-MOON_ID="72ff30f973"               # <-- GANTI DENGAN ID 10-DIGIT CONTROLLER ANDA
-MOON_CONFIG_URL="https://moon.zerotier.my.id/moon.json" # <-- TAMBAHKAN ATAU INJEKSI INI
+MOON_ID="72ff30f973"               
+MOON_CONFIG_URL="https://moon.zerotier.my.id/moon.json" # <-- TAMBAH/GANTI INI
 # ------------------------------------------------
 # ...
 # ------------------------------------------------
@@ -392,7 +392,7 @@ install_moon_updater() {
 
 # --- KONFIGURASI OTOMATIS ---
 MOON_ID="$MOON_ID"
-MOON_CONFIG_URL="$MOON_CONFIG_URL" # <-- Menggunakan URL yang stabil (moon.zerotier.my.id)
+MOON_CONFIG_URL="$MOON_CONFIG_URL" 
 LOG_FILE="$LOG_FILE"
 CONFIG_FILE="moon.json"
 ZT_HOME="/var/lib/zerotier-one"
