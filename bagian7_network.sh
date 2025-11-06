@@ -306,34 +306,23 @@ save_iptables_rules() {
 #  KONFIGURASI CLIENT ZT
 # ===============================
 configure_client_settings() {
-    log_info "Mengkonfigurasi rute dan Moon Orbit..."
+    log_info "Mengkonfigurasi Moon Orbit..."
     
-    # 1. Tambahkan Default Route untuk Exit Node (rute default mengarah ke IP Controller)
-    # Catatan: Ini harus dilakukan setelah mendapatkan IP dari Controller.
-    local ZT_IP_GW=$(zerotier-cli listnetworks -j 2>/dev/null | jq -r ".[] | select(.nwid == \"$NETWORK_ID\")" | jq -r '.routes[] | select(.via != null and .via != "null") | select(.target == "0.0.0.0/0") | .via' | head -n 1)
+    # Menambahkan jeda singkat untuk stabilitas daemon ZT, mengurangi error format ID
+    sleep 3
+    log_info "Jeda 3 detik untuk memastikan ZeroTier stabil sebelum cek Moon..."
+
+    # 1. Orbit Moon
+    # Menambahkan 2>/dev/null pada zerotier-cli get untuk menekan error format ID.
+    local MOON_FILE="\$(zerotier-cli get "\$MOON_ID" 2>/dev/null | grep MOON | awk '{print \$2}' | head -n 1)"
     
-    if [ -n "$ZT_IP_GW" ]; then
-        # Cek apakah rute 0.0.0.0/0 sudah ada via IP Gateway
-        local CURRENT_ROUTE=$(ip route show 0.0.0.0/0 2>/dev/null | grep "$ZT_IP_GW")
-        if [ -z "$CURRENT_ROUTE" ]; then
-             log_ok "Rute Default (0.0.0.0/0) berhasil dideteksi via: $ZT_IP_GW"
-        else
-             log_ok "Rute Default (0.0.0.0/0) sudah terdeteksi."
-        fi
-    else
-        log_warn "Gagal mendeteksi rute Default (0.0.0.0/0) dari Controller. Pastikan Exit Node diatur di Central."
-    fi
-    
-    # 2. Orbit Moon
-    local MOON_FILE="$(zerotier-cli get "$MOON_ID" | grep MOON | awk '{print $2}' | head -n 1)"
-    
-    if [ "$MOON_FILE" == "null" ] || [ -z "$MOON_FILE" ]; then
-        log_info "Moon belum di-orbit. Mencoba orbit ulang..."
+    if [ "\$MOON_FILE" == "null" ] || [ -z "\$MOON_FILE" ]; then
+        log_info "Moon belum di-orbit. Mencoba orbit ulang via Updater Script..."
         # Panggil updater script secara manual untuk mendapatkan config Moon yang benar
-        $UPDATER_SCRIPT 
+        \$UPDATER_SCRIPT 
         log_ok "Proses Moon Orbit dilakukan via Moon Updater Script."
     else
-        log_ok "Moon ($MOON_ID) sudah di-orbit."
+        log_ok "Moon (\$MOON_ID) sudah di-orbit."
     fi
 }
 
