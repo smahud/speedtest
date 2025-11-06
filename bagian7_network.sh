@@ -20,6 +20,9 @@ UPDATER_SCRIPT="/usr/local/bin/zt-moon-updater.sh"
 
 # --- KONFIGURASI KRITIS UNTUK AUTO-UPDATE MOON ---
 MOON_ID="72ff30f973"               # <-- GANTI DENGAN ID 10-DIGIT CONTROLLER ANDA
+MOON_CONFIG_URL="https://moon.zerotier.my.id/moon.json" # <-- TAMBAHKAN ATAU INJEKSI INI
+# ------------------------------------------------
+# ...
 # ------------------------------------------------
 
 # Timeout untuk menunggu interface ZeroTier aktif (detik)
@@ -361,105 +364,73 @@ EOT3
 }
 
 # ------------------------------------------------------------------
-# FUNGSI MOON UPDATER OTOMATIS (V3.5 - DYNAMIC FIX)
+# FUNGSI MOON UPDATER OTOMATIS (V4.0 - DNS/HTTPS FIX)
 # ------------------------------------------------------------------
 install_moon_updater() {
-    log_info "Menginstal Moon Updater Script (V3.5 - Dynamic IP Fix)..."
+    log_info "Menginstal Moon Updater Script (V4.0 - Stable DNS/HTTPS Fix)..."
     
-    # 1. Pastikan JQ terinstal
+    # 1. Pastikan dependensi terinstal (jq dan wget)
     if ! command -v jq &>/dev/null; then
         log_info "Menginstal jq (JSON processor)..."
         $PKG_UPDATE >/dev/null 2>&1
         $PKG_INSTALL jq >/dev/null 2>&1
         log_ok "jq berhasil diinstal."
     fi
+    if ! command -v wget &>/dev/null; then
+        log_info "Menginstal wget..."
+        $PKG_UPDATE >/dev/null 2>&1
+        $PKG_INSTALL wget >/dev/null 2>&1
+        log_ok "wget berhasil diinstal."
+    fi
 
-    # 2. Tulis Script Updater
+    # 2. Tulis Script Updater (NEW LOGIC)
     cat > "$UPDATER_SCRIPT" <<EOT4
 #!/bin/bash
 # Script Updater Moon Server ZeroTier (Client Side)
-# V3.5 - Menggunakan deteksi IP dinamis (self-healing)
+# V4.0 - Menggunakan URL Publik Stabil (HTTPS/Cloudflare)
 # Dijalankan via Cron Job
 
 # --- KONFIGURASI OTOMATIS ---
 MOON_ID="$MOON_ID"
-NETWORK_ID="$NETWORK_ID"
+MOON_CONFIG_URL="$MOON_CONFIG_URL" # <-- Menggunakan URL yang stabil (moon.zerotier.my.id)
 LOG_FILE="$LOG_FILE"
-CONFIG_FILE="latest_moon_config.json"
+CONFIG_FILE="moon.json"
+ZT_HOME="/var/lib/zerotier-one"
 # --------------------------
 
 log() { echo "\$(date +'%Y-%m-%d %H:%M:%S') \$1" >> "\$LOG_FILE"; }
 
-# FUNGSI BARU: Deteksi IP Controller Secara Dinamis (Brute-Force Ping/Download)
-find_controller_zt_ip() {
-    # 1. Dapatkan daftar IP yang dialokasikan di network ini
-    local ZT_IPS_WITH_MASK=\$(/usr/sbin/zerotier-cli listnetworks -j 2>/dev/null | /usr/bin/jq -r ".[] | select(.nwid == \"\$NETWORK_ID\")" | /usr/bin/jq -r '.assignedAddresses[]' 2>/dev/null | grep -v '0\.0\.0\.0')
-    
-    # Jika tidak ada IP yang dialokasikan (belum authorized), keluar
-    if [ -z "\$ZT_IPS_WITH_MASK" ]; then
-        log "[WARNING] Client belum ter-authorize. Tidak ada IP untuk diuji."
-        return 1
-    fi
-
-    # 2. Dapatkan IP klien sendiri
-    local MY_ZT_IP=\$(echo "\$ZT_IPS_WITH_MASK" | head -n 1 | cut -d '/' -f 1)
-    
-    # 3. Iterasi setiap IP yang dialokasikan (kecuali IP klien sendiri)
-    
-    local POTENTIAL_CONTROLLERS=\$(echo "\$ZT_IPS_WITH_MASK" | cut -d '/' -f 1 | grep -v "\$MY_ZT_IP" | sort -u)
-    
-    # Tambahkan fallback IP Controller yang umum (misal: x.x.x.1 dari subnet)
-    local SUBNET_BASE=\$(echo "\$MY_ZT_IP" | cut -d '.' -f 1-3)
-    local FALLBACK_IP="\${SUBNET_BASE}.1"
-    
-    POTENTIAL_CONTROLLERS="\$(echo -e "\$POTENTIAL_CONTROLLERS\\n\$FALLBACK_IP" | sort -u | uniq)"
-    
-    for IP in \$POTENTIAL_CONTROLLERS; do
-        if [ "\$IP" == "\$MY_ZT_IP" ]; then continue; fi
-        
-        # Coba download file config dari IP yang ditemukan
-        CONFIG_URL="http://\$IP/\$CONFIG_FILE"
-        log "[INFO] Mencoba IP Controller: \$IP"
-        
-        # Gunakan timeout rendah
-        if /usr/bin/curl -s --max-time 3 "\$CONFIG_URL" -o /tmp/downloaded_moon.json; then
-            echo "\$IP"
-            return 0
-        fi
-    done
-
-    log "[ERROR] Gagal menemukan IP Controller yang valid di network (\$NETWORK_ID)."
-    return 1
-}
-
+# Check ZeroTier service
 if ! systemctl is-active --quiet zerotier-one; then exit 0; fi
 
-# 2. Cek dependensi (curl dan jq)
-if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
-    log "[ERROR] Dependensi (jq/curl) hilang. Cek instalasi di script utama."
+# Check dependencies
+if ! command -v jq &>/dev/null || ! command -v wget &>/dev/null; then
+    log "[ERROR] Dependensi (jq/wget) hilang."
     exit 1
 fi
 
-CONTROLLER_ZT_IP=\$(find_controller_zt_ip)
+MOON_FILE="/tmp/downloaded_\$CONFIG_FILE"
 
-if [ -z "\$CONTROLLER_ZT_IP" ]; then
-    log "[ERROR] Tidak dapat menentukan/menghubungi IP Controller ZT. Melewatkan pembaruan."
+# 1. Unduh Moon Config dari URL Publik Stabil
+log "[INFO] Mengunduh Moon Config dari \$MOON_CONFIG_URL..."
+
+# Menggunakan wget dengan no-check-certificate untuk kompatibilitas HTTPS
+if ! /usr/bin/wget -q --no-check-certificate -O "\$MOON_FILE" "\$MOON_CONFIG_URL"; then
+    log "[ERROR] Gagal mengunduh Moon Config dari \$MOON_CONFIG_URL."
+    rm -f "\$MOON_FILE"
     exit 1
 fi
 
-CONFIG_URL="http://\$CONTROLLER_ZT_IP/\$CONFIG_FILE"
-log "[OK] IP Controller ZT Ditemukan: \$CONTROLLER_ZT_IP. Mengunduh config dari \$CONFIG_URL"
-
-# Download final (file sudah ada di /tmp/downloaded_moon.json jika find_controller_zt_ip berhasil)
-
-NEW_ENDPOINT=\$(/usr/bin/jq -r '.roots[0].stableEndpoints[0]' /tmp/downloaded_moon.json 2>/dev/null)
+# 2. Ekstrak Stable Endpoint Baru
+NEW_ENDPOINT=\$(/usr/bin/jq -r '.roots[0].stableEndpoints[0]' "\$MOON_FILE" 2>/dev/null)
 
 if [ -z "\$NEW_ENDPOINT" ] || [ "\$NEW_ENDPOINT" == "null" ]; then
-    log "[ERROR] Gagal mendapatkan Stable Endpoint (menggunakan JQ). File config mungkin tidak valid. Hapus config sementara."
-    rm -f /tmp/downloaded_moon.json
+    log "[ERROR] Gagal mendapatkan Stable Endpoint (menggunakan JQ). File config tidak valid."
+    rm -f "\$MOON_FILE"
     exit 1
 fi
 
+# 3. Bandingkan dengan Endpoint Saat Ini (Mencegah restart yang tidak perlu)
 CURRENT_PEER_INFO=\$(/usr/sbin/zerotier-cli listpeers | grep "\$MOON_ID" | grep MOON)
 
 if echo "\$CURRENT_PEER_INFO" | grep -q "\$NEW_ENDPOINT"; then
@@ -467,6 +438,7 @@ if echo "\$CURRENT_PEER_INFO" | grep -q "\$NEW_ENDPOINT"; then
 else
     log "[WARNING] Endpoint baru terdeteksi: \$NEW_ENDPOINT. Memulai proses Orbit ulang."
 
+    # Perintah utama ZeroTier: orbit <Moon ID> <Stable Endpoint>
     /usr/sbin/zerotier-cli orbit "\$MOON_ID" "\$NEW_ENDPOINT"
     sleep 3
     systemctl restart zerotier-one
@@ -474,7 +446,7 @@ else
     log "[SUCCESS] Controller di-orbit ulang ke \$NEW_ENDPOINT dan ZeroTier di-restart."
 fi
 
-rm -f /tmp/downloaded_moon.json
+rm -f "\$MOON_FILE"
 exit 0
 EOT4
     # 3. Berikan izin eksekusi
