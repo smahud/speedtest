@@ -1,5 +1,5 @@
 #!/bin/bash
-# Versi: 3.5 (Full Dynamic IP Moon Updater - NO WAIT AUTH)
+# Versi: 3.6 (Full Dynamic IP Moon Updater - NO WAIT AUTH)
 # Dibuat pada 6 November 2025
 #
 # KONFIGURASI:
@@ -523,7 +523,6 @@ main() {
 
 # Execute main program
 if [ "$1" == "-postboot" ]; then
-    # Jika dipanggil dari systemd, hanya jalankan NAT setup dan restart updater
     enable_ip_forwarding
     configure_rp_filter
     setup_nat
