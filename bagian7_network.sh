@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 ###############################################################################
 # bagian7_network.sh — ZeroTier Exit Node + Moon Updater
-# Versi: 7.0 (Fix: tambah set -e)
+# Versi: 7.1 (Fix: Text file busy + proper error handling + idempotent)
 ###############################################################################
 set -euo pipefail
 
@@ -33,87 +33,104 @@ fi
 # KONFIGURASI UTAMA
 # ===============================
 NETWORK_ID="${ZeroTierNetworkID:-72ff30f9733a82d9}"
-SCRIPT_PATH="/usr/local/bin/zt-exitnode.sh"
-SERVICE_FILE="/etc/systemd/system/zt-exitnode.service"
 UPDATER_SCRIPT="/usr/local/bin/zt-moon-updater.sh"
 MOON_ID="${ZeroTierMoonID:-72ff30f973}"
 MOON_CONFIG_URL="${ZeroTierMoonConfigURL:-https://moon.zerotier.my.id/moon.json}"
-ZT_WAIT_TIMEOUT=60
-ZT_WAIT_INTERVAL=3
-ZT_LOG_FILE="/var/log/zt-moon-updater.log"
+ZEROTIER_BIN="/usr/sbin/zerotier-one"
 
 # ===============================
-# INSTALL ZEROTIER
+# HELPER: Stop ZeroTier
+# ===============================
+stop_zerotier() {
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl stop zerotier-one 2>/dev/null || true
+  elif command -v rc-service >/dev/null 2>&1; then
+    rc-service zerotier-one stop 2>/dev/null || true
+  fi
+  if pgrep -x zerotier-one >/dev/null 2>&1; then
+    pkill zerotier-one 2>/dev/null || true
+    sleep 2
+  fi
+}
+
+# ===============================
+# INSTALL ZEROTIER (idempotent)
 # ===============================
 install_zerotier() {
   log_info "Menginstal ZeroTier (Metode APK/Official/Binary)..."
 
-  if [ "${OS_FAMILY:-}" = "alpine" ]; then
-    local alpine_ver
-    alpine_ver=$(cut -d. -f1,2 /etc/alpine-release 2>/dev/null || echo "latest-stable")
-
-    # Sinkronisasi repository Alpine
-    if [ -f /etc/apk/repositories ]; then
-      local repo_added=0
-      for repo_url in \
-        "https://dl-cdn.alpinelinux.org/alpine/v$alpine_ver/community" \
-        "https://dl-cdn.alpinelinux.org/alpine/edge/community"; do
-        if ! grep -q "$repo_url" /etc/apk/repositories; then
-          echo "$repo_url" >> /etc/apk/repositories
-          repo_added=1
-        fi
-      done
-      [ "$repo_added" -eq 1 ] && apk update >/dev/null 2>&1
-    fi
-
-    # Coba instalasi via APK
-    if apk add --no-cache zerotier-one >/dev/null 2>&1; then
-      log_ok "ZeroTier berhasil diinstal via apk Alpine."
-    else
-      # Fallback ke biner statis di repository GitHub
-      log_warn "APK gagal. Mencoba menggunakan biner statis dari GitHub..."
-      local arch
-      arch=$(uname -m)
-      local raw_url="${REPO_RAW_BASE:-https://raw.githubusercontent.com/smahud/speedtest/main}"
-      local remote_bin="$raw_url/zerotier/zerotier-one-$arch-alpine"
-      local local_bin="/usr/sbin/zerotier-one"
-
-      if wget -q -O "$local_bin" "$remote_bin"; then
-        chmod +x "$local_bin"
-        [ -L /usr/sbin/zerotier-cli ] || ln -sf "$local_bin" /usr/sbin/zerotier-cli
-        [ -L /usr/sbin/zerotier-idtool ] || ln -sf "$local_bin" /usr/sbin/zerotier-idtool
-        mkdir -p /var/lib/zerotier-one
-        log_ok "ZeroTier terpasang via biner statis ($arch)."
-      else
-        log_error "Gagal menginstal ZeroTier: Repository dan biner fallback tidak tersedia untuk arsitektur $arch."
-        log_error "URL dicoba: $remote_bin"
-        return 1
-      fi
-    fi
+  if [ -x "$ZEROTIER_BIN" ]; then
+    log_ok "ZeroTier binary sudah ada di $ZEROTIER_BIN. Melewati download."
   else
-    log_info "Menggunakan installer resmi ZeroTier (Debian/RedHat)..."
-    if curl -s https://install.zerotier.com | bash >/dev/null 2>&1; then
-      log_ok "ZeroTier berhasil diinstal via installer resmi."
-    else
-      log_error "Installer resmi gagal. Mencoba via package manager..."
-      local ok=0
-      if command -v apt-get >/dev/null 2>&1; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y zerotier-one >/dev/null 2>&1 && ok=1
-      elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y zerotier-one >/dev/null 2>&1 && ok=1
-      elif command -v yum >/dev/null 2>&1; then
-        yum install -y zerotier-one >/dev/null 2>&1 && ok=1
+    stop_zerotier
+
+    if [ "${OS_FAMILY:-}" = "alpine" ]; then
+      local alpine_ver
+      alpine_ver=$(cut -d. -f1,2 /etc/alpine-release 2>/dev/null || echo "latest-stable")
+
+      if [ -f /etc/apk/repositories ]; then
+        local repo_added=0
+        for repo_url in \
+          "https://dl-cdn.alpinelinux.org/alpine/v$alpine_ver/community" \
+          "https://dl-cdn.alpinelinux.org/alpine/edge/community"; do
+          if ! grep -q "$repo_url" /etc/apk/repositories; then
+            echo "$repo_url" >> /etc/apk/repositories
+            repo_added=1
+          fi
+        done
+        [ "$repo_added" -eq 1 ] && apk update >/dev/null 2>&1
       fi
-      if [ "$ok" -eq 1 ]; then
-        log_ok "ZeroTier berhasil diinstal via package manager."
+
+      if apk add --no-cache zerotier-one >/dev/null 2>&1; then
+        log_ok "ZeroTier berhasil diinstal via apk Alpine."
       else
-        log_error "Gagal menginstal ZeroTier."
-        return 1
+        log_warn "APK gagal. Mencoba menggunakan biner statis dari GitHub..."
+        local arch
+        arch=$(uname -m)
+        local raw_url="${REPO_RAW_BASE:-https://raw.githubusercontent.com/smahud/speedtest/main}"
+        local remote_bin="$raw_url/zerotier/zerotier-one-$arch-alpine"
+
+        local tmp_bin
+        tmp_bin="$(mktemp)"
+        if wget -q -O "$tmp_bin" "$remote_bin" 2>/dev/null; then
+          mv -f "$tmp_bin" "$ZEROTIER_BIN"
+          chmod +x "$ZEROTIER_BIN"
+          [ -L /usr/sbin/zerotier-cli ] || ln -sf "$ZEROTIER_BIN" /usr/sbin/zerotier-cli
+          [ -L /usr/sbin/zerotier-idtool ] || ln -sf "$ZEROTIER_BIN" /usr/sbin/zerotier-idtool
+          mkdir -p /var/lib/zerotier-one
+          log_ok "ZeroTier terpasang via biner statis ($arch)."
+        else
+          rm -f "$tmp_bin"
+          log_error "Gagal mengunduh biner ZeroTier dari: $remote_bin"
+          log_error "Pastikan binary untuk arsitektur $arch tersedia di folder zerotier/ repository."
+          return 1
+        fi
+      fi
+    else
+      log_info "Menggunakan installer resmi ZeroTier (Debian/RedHat)..."
+      if curl -s https://install.zerotier.com | bash >/dev/null 2>&1; then
+        log_ok "ZeroTier berhasil diinstal via installer resmi."
+      else
+        log_warn "Installer resmi gagal. Mencoba via package manager..."
+        local ok=0
+        if command -v apt-get >/dev/null 2>&1; then
+          DEBIAN_FRONTEND=noninteractive apt-get install -y zerotier-one >/dev/null 2>&1 && ok=1
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y zerotier-one >/dev/null 2>&1 && ok=1
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y zerotier-one >/dev/null 2>&1 && ok=1
+        fi
+        if [ "$ok" -eq 1 ]; then
+          log_ok "ZeroTier berhasil diinstal via package manager."
+        else
+          log_error "Gagal menginstal ZeroTier melalui semua metode."
+          return 1
+        fi
       fi
     fi
   fi
 
-  # Registrasi Service (Systemd/OpenRC)
+  # Registrasi Service
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable zerotier-one >/dev/null 2>&1 || true
@@ -139,6 +156,9 @@ EOF
   sleep 3
 }
 
+# ===============================
+# VERIFY SERVICE
+# ===============================
 verify_zerotier_service() {
   log_info "Memverifikasi service ZeroTier..."
   local status_output
@@ -148,10 +168,14 @@ verify_zerotier_service() {
     return 0
   fi
   log_warn "ZeroTier belum online, mencoba start ulang..."
+  stop_zerotier
+  sleep 2
   if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl start zerotier-one >/dev/null 2>&1 || true
   elif command -v rc-service >/dev/null 2>&1; then
     rc-service zerotier-one start >/dev/null 2>&1 || true
+  else
+    $ZEROTIER_BIN -d >/dev/null 2>&1 || true
   fi
   sleep 5
   status_output=$(zerotier-cli info 2>/dev/null || true)
@@ -163,20 +187,26 @@ verify_zerotier_service() {
   return 1
 }
 
+# ===============================
+# JOIN NETWORK
+# ===============================
 join_network() {
   log_info "Memeriksa status join ke network $NETWORK_ID..."
   if zerotier-cli listnetworks 2>/dev/null | grep -q "$NETWORK_ID"; then
     log_ok "Sudah tergabung ke network $NETWORK_ID"
-  else
-    if zerotier-cli join "$NETWORK_ID" >/dev/null 2>&1; then
-      log_ok "Berhasil join ke network $NETWORK_ID"
-    else
-      log_error "Gagal join ke network!"
-      return 1
-    fi
+    return 0
   fi
+  if zerotier-cli join "$NETWORK_ID" >/dev/null 2>&1; then
+    log_ok "Berhasil join ke network $NETWORK_ID"
+    return 0
+  fi
+  log_error "Gagal join ke network $NETWORK_ID!"
+  return 1
 }
 
+# ===============================
+# CHECK AUTHORIZATION
+# ===============================
 check_authorization() {
   log_info "Memeriksa status authorization..."
   local node_id
@@ -192,6 +222,9 @@ check_authorization() {
   fi
 }
 
+# ===============================
+# IP FORWARDING + NAT
+# ===============================
 enable_ip_forwarding() {
   log_info "Mengaktifkan IP Forwarding..."
   if [ -d /etc/sysctl.d ]; then
@@ -217,13 +250,13 @@ setup_nat() {
   iptables -A FORWARD -i "$PUBLIC_INTERFACE" -o "$ZT_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
 }
 
+# ===============================
+# MOON UPDATER
+# ===============================
 install_moon_updater() {
   log_info "Menginstal Moon Updater..."
   cat > "$UPDATER_SCRIPT" <<'SCRIPTEOF'
 #!/bin/sh
-# Moon Updater untuk ZeroTier
-# Diinstal otomatis oleh bagian7_network.sh
-
 MOON_ID="${MOON_ID:-72ff30f973}"
 MOON_CONFIG_URL="${MOON_CONFIG_URL:-https://moon.zerotier.my.id/moon.json}"
 LOG_FILE="${LOG_FILE:-/var/log/zt-moon-updater.log}"
@@ -243,20 +276,38 @@ SCRIPTEOF
   (crontab -l 2>/dev/null | grep -v "$UPDATER_SCRIPT"; echo "*/15 * * * * $UPDATER_SCRIPT") | crontab - 2>/dev/null || true
 }
 
+# ===============================
+# MAIN
+# ===============================
 main() {
   log_info "== Bagian 7: ZeroTier Exit Node & Moon Setup =="
-  install_zerotier || return 0
-  verify_zerotier_service || return 0
-  join_network || true
-  check_authorization || true
-  enable_ip_forwarding
-  setup_nat || true
+
+  # Step 1: Install — error tidak mematikan, tapi dicatat jelas
+  if ! install_zerotier; then
+    log_warn "ZeroTier GAGAL dipasang. Melanjutkan tanpa ZeroTier."
+    log_warn "Bagian 7 selesai SEBAGIAN (ZeroTier tidak aktif)."
+    return 0
+  fi
+
+  # Step 2: Verify — error tidak mematikan
+  if ! verify_zerotier_service; then
+    log_warn "ZeroTier service tidak online. Melanjutkan tanpa ZeroTier."
+    log_warn "Bagian 7 selesai SEBAGIAN (ZeroTier tidak online)."
+    return 0
+  fi
+
+  # Step 3..6: Lanjutkan
+  join_network || log_warn "Gagal join network ZeroTier (tidak kritis)."
+  check_authorization || log_warn "Node belum di-authorize — authorize manual di dashboard."
+  enable_ip_forwarding || true
+  setup_nat || log_warn "NAT setup gagal (tidak kritis)."
   install_moon_updater
+
   log_ok "Bagian 7 selesai."
 }
 
 if [ "${1:-}" = "-postboot" ]; then
-  enable_ip_forwarding
+  enable_ip_forwarding || true
   setup_nat || true
 else
   main
