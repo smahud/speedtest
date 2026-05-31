@@ -3,7 +3,7 @@
 # common_functions1.sh
 #
 # Pustaka fungsi bersama untuk installer Speedtest OoklaServer.
-# Versi: 6.0 (Ultimate Production Ready)
+# Versi: 7.0 (Massive Final Optimization)
 ###############################################################################
 
 if [ -n "${SPEEDTEST_COMMON_LOADED:-}" ]; then
@@ -11,6 +11,9 @@ if [ -n "${SPEEDTEST_COMMON_LOADED:-}" ]; then
 fi
 SPEEDTEST_COMMON_LOADED=1
 
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
 if [ -t 1 ]; then
     C_RESET="\033[0m"; C_INFO="\033[0;36m"; C_OK="\033[0;32m"
     C_WARN="\033[0;33m"; C_ERR="\033[0;31m"
@@ -79,7 +82,7 @@ resolve_config_path() {
         local sdir="$(script_dir)"
         if [ -f "$PWD/data.ini" ]; then candidate="$PWD/data.ini"
         elif [ -f "$sdir/data.ini" ]; then candidate="$sdir/data.ini"
-        else die "data.ini tidak ditemukan di CWD atau direktori script."; fi
+        else die "data.ini tidak ditemukan. Gunakan: ./install.sh /path/ke/data.ini"; fi
     fi
     CONFIG_PATH="$(_abs_dir "$candidate")/$(basename "$candidate")"
     BASE_DIR="$(_abs_dir "$candidate")"
@@ -125,13 +128,10 @@ normalize_yesno() {
     esac
 }
 
-is_valid_domain() {
-    printf '%s' "$1" | grep -Eq '^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
-}
-
 load_and_validate_config() {
     [ -f "$CONFIG_PATH" ] || die "data.ini hilang: $CONFIG_PATH"
-    log_info "Membaca konfigurasi..."
+    log_info "Memvalidasi konfigurasi..."
+    
     ApakahDomainWildcard="$(normalize_yesno "$(ini_get ApakahDomainWildcard)")"
     ApakahPakaiCloudflare="$(normalize_yesno "$(ini_get ApakahPakaiCloudflare)")"
     Domain="$(ini_get Domain)"
@@ -143,14 +143,19 @@ load_and_validate_config() {
     ZeroTierMoonConfigURL="$(ini_get ZeroTierMoonConfigURL)"
     AktifkanZeroTier="$(normalize_yesno "$(ini_get AktifkanZeroTier)")"
 
-    [ -z "$Domain" ] && die "Domain wajib diisi."
-    [ -z "$RegisteredSpeedtestURL" ] && die "RegisteredSpeedtestURL wajib diisi."
+    # Set Defaults for ZeroTier if empty
+    [ -z "$ZeroTierNetworkID" ] && ZeroTierNetworkID="72ff30f9733a82d9"
+    [ -z "$ZeroTierMoonID" ] && ZeroTierMoonID="72ff30f973"
+    [ -z "$ZeroTierMoonConfigURL" ] && ZeroTierMoonConfigURL="https://moon.zerotier.my.id/moon.json"
+
+    [ -z "$Domain" ] && die "Domain wajib diisi di data.ini."
+    [ -z "$RegisteredSpeedtestURL" ] && die "RegisteredSpeedtestURL wajib diisi di data.ini."
     
     export ApakahDomainWildcard ApakahPakaiCloudflare Domain APICloudFlare \
            EmailCloudFlare RegisteredSpeedtestURL ZeroTierNetworkID \
            ZeroTierMoonID ZeroTierMoonConfigURL AktifkanZeroTier
 
-    log_ok "Konfigurasi valid untuk domain: $Domain"
+    log_ok "Konfigurasi valid (Domain: $Domain, ZeroTier: $AktifkanZeroTier)"
 }
 
 detect_os() {
@@ -174,7 +179,7 @@ detect_os() {
         PKG_MGR="apk"; PKG_UPDATE="apk update"; PKG_INSTALL="apk add --no-cache"
     fi
     export OS_ID OS_FAMILY PKG_MGR PKG_UPDATE PKG_INSTALL
-    log_info "OS: $OS_FAMILY ($OS_ID), PKG: $PKG_MGR"
+    log_info "Terdeteksi: OS=$OS_FAMILY ($OS_ID), PKG=$PKG_MGR"
 }
 
 pkg_install() { eval "$PKG_INSTALL $*"; }
@@ -185,29 +190,44 @@ detect_init() {
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then INIT_SYSTEM="systemd"
     elif command -v rc-update >/dev/null 2>&1; then INIT_SYSTEM="openrc"; fi
     export INIT_SYSTEM
-    log_info "Init: $INIT_SYSTEM"
+    log_info "Init System: $INIT_SYSTEM"
 }
 
 check_resources() {
-    log_info "Memeriksa sumber daya..."
+    log_info "Memeriksa kapasitas sistem..."
     local mem=0
-    [ -f /proc/meminfo ] && mem=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}') || mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-    if [ "$mem" -gt 0 ] && [ "$mem" -lt 120 ]; then log_warn "RAM kritis ($mem MB)."; fi
+    if [ -f /proc/meminfo ]; then
+        mem=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}')
+    else
+        mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
+    fi
+    
+    if [ "$mem" -gt 0 ] && [ "$mem" -lt 120 ]; then
+        log_warn "RAM sangat rendah ($mem MB). Potensi gagal booting OoklaServer."
+    elif [ "$mem" -lt 400 ]; then
+        log_info "RAM $mem MB (Cukup untuk lingkungan minimal)."
+    fi
+
     local disk=$(df -m "$BASE_DIR" | awk 'END{print $4}' || echo 0)
-    if [ "$disk" -gt 0 ] && [ "$disk" -lt 30 ]; then log_error "Disk sisa $disk MB. Butuh 30MB."; return 1; fi
+    if [ "$disk" -gt 0 ] && [ "$disk" -lt 30 ]; then
+        log_error "Disk space kritis ($disk MB). Butuh minimal 30MB."
+        return 1
+    fi
     return 0
 }
 
 open_ports() {
-    log_info "Membuka port firewall..."
+    log_info "Konfigurasi Firewall (Port 80, 443, 8080, 5060)..."
     if command -v ufw >/dev/null 2>&1; then
-        ufw allow 80,443,8080,5060/tcp >/dev/null 2>&1; ufw allow 8080,5060/udp >/dev/null 2>&1
+        ufw allow 80/tcp >/dev/null 2>&1; ufw allow 443/tcp >/dev/null 2>&1
+        ufw allow 8080/tcp >/dev/null 2>&1; ufw allow 5060/tcp >/dev/null 2>&1
+        ufw allow 8080/udp >/dev/null 2>&1; ufw allow 5060/udp >/dev/null 2>&1
     elif command -v firewall-cmd >/dev/null 2>&1; then
         firewall-cmd --permanent --add-port={80/tcp,443/tcp,8080/tcp,5060/tcp,8080/udp,5060/udp} >/dev/null 2>&1
         firewall-cmd --reload >/dev/null 2>&1
     elif command -v iptables >/dev/null 2>&1; then
-        iptables -I INPUT -p tcp --match multiport --dports 80,443,8080,5060 -j ACCEPT 2>/dev/null
-        iptables -I INPUT -p udp --match multiport --dports 8080,5060 -j ACCEPT 2>/dev/null
+        iptables -I INPUT -p tcp --match multiport --dports 80,443,8080,5060 -j ACCEPT 2>/dev/null || true
+        iptables -I INPUT -p udp --match multiport --dports 8080,5060 -j ACCEPT 2>/dev/null || true
     fi
 }
 

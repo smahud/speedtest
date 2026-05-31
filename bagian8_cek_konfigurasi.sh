@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 ###############################################################################
 # bagian8_cek_konfigurasi.sh
-#   - Membuat service auto-start sesuai init system (systemd/openrc/fallback).
+#   - Membuat service auto-start (Systemd/OpenRC/Cron Fallback).
 #   - Menambah cron auto-restart harian.
-#   - Memeriksa status OoklaServer.
-#   - Semua path mengikuti $BASE_DIR (TIDAK ada /root/ hardcoded).
+#   - Verifikasi status runtime (Process + Port Check).
+# Versi: 6.0 (Massive Final Optimization)
 ###############################################################################
 set -uo pipefail
 SPEEDTEST_SCRIPT_DIR="${SPEEDTEST_SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)}"
@@ -17,18 +17,16 @@ if [ -z "${BASE_DIR:-}" ]; then
 fi
 detect_init
 
-log_info "== Bagian 8: Service Auto-Start & Verifikasi =="
+log_info "== Bagian 8: Konfigurasi Service & Verifikasi Akhir =="
 
 # Generate management tool (speedtestctl.sh) di BASE_DIR.
 generate_ctl() {
     cat > "$BASE_DIR/speedtestctl.sh" <<EOF
 #!/usr/bin/env bash
 # speedtestctl.sh — management OoklaServer (auto-generated)
-# Bisa dijalankan dari direktori mana pun.
 set -euo pipefail
 STATE_FILE="$STATE_FILE"
 [ -f "\$STATE_FILE" ] || { echo "State instalasi tidak ditemukan: \$STATE_FILE"; exit 1; }
-# shellcheck source=/dev/null
 . "\$STATE_FILE"
 
 usage() { echo "Usage: \$0 {start|stop|restart|status|logs|uninstall}"; }
@@ -38,51 +36,39 @@ case "\$cmd" in
     start)   ( cd "\$BASE_DIR" && "\$OOKLA_SCRIPT" start ) ;;
     stop)    ( cd "\$BASE_DIR" && "\$OOKLA_SCRIPT" stop ) ;;
     restart) ( cd "\$BASE_DIR" && "\$OOKLA_SCRIPT" restart ) ;;
-    logs)
-        if [ -f "\$BASE_DIR/OoklaServer.log" ]; then
-            tail -f "\$BASE_DIR/OoklaServer.log"
-        else
-            echo "Log file tidak ditemukan di \$BASE_DIR/OoklaServer.log"
-            # Cek syslog sebagai fallback
-            if command -v journalctl >/dev/null 2>&1; then
-                journalctl -u ooklaserver.service -f
-            fi
-        fi
-        ;;
+    logs)    [ -f "\$BASE_DIR/OoklaServer.log" ] && tail -f "\$BASE_DIR/OoklaServer.log" || journalctl -u ooklaserver.service -f 2>/dev/null || echo "Log tidak ditemukan." ;;
     status)
         if pgrep -x OoklaServer >/dev/null 2>&1; then
-            echo "OoklaServer: RUNNING (BASE_DIR=\$BASE_DIR, domain=\$DOMAIN)"
+            echo "OoklaServer: RUNNING (BASE_DIR=\$BASE_DIR)"
         else
-            echo "OoklaServer: STOPPED (BASE_DIR=\$BASE_DIR)"
+            echo "OoklaServer: STOPPED"
         fi
         ;;
     uninstall)
-        echo "Menghentikan & menghapus service OoklaServer..."
+        echo "Menghapus service OoklaServer..."
         ( cd "\$BASE_DIR" && "\$OOKLA_SCRIPT" stop ) >/dev/null 2>&1 || true
-        pkill -f "\$OOKLA_BIN" 2>/dev/null || true
         if [ "\$INIT_SYSTEM" = "systemd" ]; then
             systemctl disable --now ooklaserver.service >/dev/null 2>&1 || true
             rm -f /etc/systemd/system/ooklaserver.service
-            systemctl daemon-reload >/dev/null 2>&1 || true
         elif [ "\$INIT_SYSTEM" = "openrc" ]; then
             rc-service ooklaserver stop >/dev/null 2>&1 || true
             rc-update del ooklaserver default >/dev/null 2>&1 || true
             rm -f /etc/init.d/ooklaserver
         fi
-        crontab -l 2>/dev/null | grep -v 'OoklaServer' | grep -v 'speedtest -o ' | crontab - 2>/dev/null || true
-        echo "Service & cron dihapus. File di \$BASE_DIR tidak dihapus (hapus manual bila perlu)."
+        crontab -l 2>/dev/null | grep -v 'OoklaServer' | crontab - 2>/dev/null || true
+        echo "Selesai."
         ;;
     *) usage; exit 1 ;;
 esac
 EOF
     chmod a+x "$BASE_DIR/speedtestctl.sh"
-    log_ok "Management tool dibuat: $BASE_DIR/speedtestctl.sh"
+    log_ok "Tool management siap: $BASE_DIR/speedtestctl.sh"
 }
 generate_ctl
 
-# --- Buat service auto-start sesuai init system -------------------------------
+# --- Buat service auto-start --------------------------------------------------
 setup_systemd() {
-    log_info "Membuat service systemd ooklaserver..."
+    log_info "Instalasi service Systemd..."
     cat > /etc/systemd/system/ooklaserver.service <<EOF
 [Unit]
 Description=Ookla Speedtest Server
@@ -96,30 +82,19 @@ ExecStart=$OOKLA_SCRIPT start
 ExecStop=$OOKLA_SCRIPT stop
 PIDFile=$OOKLA_PIDFILE
 Restart=on-failure
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload >/dev/null 2>&1 || true
     systemctl enable ooklaserver.service >/dev/null 2>&1 || true
-    systemctl restart ooklaserver.service >/dev/null 2>&1 || \
-        ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart ) || true
-    log_ok "Service systemd ooklaserver aktif."
+    systemctl restart ooklaserver.service >/dev/null 2>&1 || ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart )
+    log_ok "Service Systemd aktif."
 }
 
 setup_openrc() {
-    log_info "Membuat service OpenRC ooklaserver..."
-    if ! command_exists crond; then
-        pkg_install cronie >/dev/null 2>&1 || true
-    fi
-    rc-update add crond default >/dev/null 2>&1 || true
-    rc-service crond start >/dev/null 2>&1 || true
-
-    # Biner OoklaServer melakukan self-daemonize & menulis pidfile sendiri.
-    # Karena itu JANGAN pakai command_background (akan double-daemonize &
-    # membuat pid kacau). Gunakan start()/stop() yang memanggil ooklaserver.sh
-    # (konsisten dengan systemd & management tool).
+    log_info "Instalasi service OpenRC..."
     cat > /etc/init.d/ooklaserver <<EOF
 #!/sbin/openrc-run
 name="OoklaServer"
@@ -142,33 +117,16 @@ stop() {
     ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" stop ) >/dev/null 2>&1
     eend \$?
 }
-
-status() {
-    if [ -f "$OOKLA_PIDFILE" ] && kill -0 "\$(cat "$OOKLA_PIDFILE" 2>/dev/null)" 2>/dev/null; then
-        einfo "OoklaServer is running"
-        return 0
-    fi
-    einfo "OoklaServer is stopped"
-    return 1
-}
 EOF
     chmod +x /etc/init.d/ooklaserver
     rc-update add ooklaserver default >/dev/null 2>&1 || true
-    rc-service ooklaserver restart >/dev/null 2>&1 || rc-service ooklaserver start >/dev/null 2>&1 || \
-        ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart ) || true
-    log_ok "Service OpenRC ooklaserver aktif."
+    rc-service ooklaserver restart >/dev/null 2>&1 || ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart )
+    log_ok "Service OpenRC aktif."
 }
 
 setup_fallback() {
-    log_warn "Init system tidak tersedia. Memakai fallback: cron @reboot + start manual."
-    if command_exists crontab; then
-        local tmp_cron="$TMP_DIR/crontab.reboot.tmp"
-        crontab -l 2>/dev/null | grep -vF "@reboot cd $BASE_DIR" > "$tmp_cron" || true
-        echo "@reboot cd $BASE_DIR && $OOKLA_SCRIPT start" >> "$tmp_cron"
-        crontab "$tmp_cron" 2>/dev/null || true
-        rm -f "$tmp_cron"
-    fi
-    ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart ) || true
+    log_warn "Init system tidak terdeteksi. Menggunakan Cron @reboot."
+    (crontab -l 2>/dev/null | grep -v "$OOKLA_SCRIPT"; echo "@reboot cd $BASE_DIR && $OOKLA_SCRIPT start") | crontab -
 }
 
 case "$INIT_SYSTEM" in
@@ -177,83 +135,39 @@ case "$INIT_SYSTEM" in
     *)       setup_fallback ;;
 esac
 
-# --- Cron auto-restart harian (idempotent, TANPA merusak urutan crontab) ------
-# Gunakan tag unik untuk dedup hanya baris milik kita; baris lain dipertahankan.
-if command_exists crontab; then
-    CRON_TAG="# ookla-daily-restart (managed)"
-    tmp_cron="$TMP_DIR/crontab.restart.tmp"
-    # Buang baris lama milik kita (tag DAN pola restart kita).
-    crontab -l 2>/dev/null | grep -vF "$CRON_TAG" | grep -vF "$OOKLA_SCRIPT restart" > "$tmp_cron" || true
-    # Tag sebagai baris komentar TERPISAH (aman untuk busybox crond di Alpine).
-    {
-        echo "$CRON_TAG"
-        echo "0 0 * * * cd $BASE_DIR && $OOKLA_SCRIPT restart"
-    } >> "$tmp_cron"
-    crontab "$tmp_cron" 2>/dev/null || log_warn "Gagal memasang cron auto-restart."
-    rm -f "$tmp_cron"
-    log_ok "Cron auto-restart harian dipasang."
-fi
+# --- Cron Daily Restart ---
+CRON_TAG="# ookla-daily-restart"
+(crontab -l 2>/dev/null | grep -v "$CRON_TAG" | grep -v "$OOKLA_SCRIPT restart"; echo "$CRON_TAG"; echo "0 0 * * * cd $BASE_DIR && $OOKLA_SCRIPT restart") | crontab - 2>/dev/null
+log_ok "Cron daily restart aktif."
 
-# --- Buka Port Firewall ---
+# --- Konfigurasi Firewall ---
 open_ports
 
-# --- Verifikasi status --------------------------------------------------------
-log_info "Memeriksa status OoklaServer..."
-# Beri waktu ekstra untuk inisialisasi pada sistem low-resource (151MB RAM)
-sleep 8
+# --- Verifikasi Status ---
+log_info "Verifikasi runtime server..."
+sleep 10 # Waktu booting RAM rendah
 
 is_running() {
-    # Check 1: Process exists (pgrep -x ensures exact match)
     if pgrep -x "OoklaServer" >/dev/null 2>&1; then return 0; fi
-    
-    # Check 2: Port is listening (fallback)
     if command -v netstat >/dev/null 2>&1; then
-        if netstat -tuln 2>/dev/null | grep -q ":8080 "; then return 0; fi
+        netstat -tuln 2>/dev/null | grep -q ":8080 " && return 0
     elif command -v ss >/dev/null 2>&1; then
-        if ss -tuln 2>/dev/null | grep -q ":8080 "; then return 0; fi
+        ss -tuln 2>/dev/null | grep -q ":8080 " && return 0
     fi
-    return 1
-}
-
-# Fungsi tunggu status (up to 30 detik)
-wait_for_running() {
-    local i
-    for i in $(seq 1 10); do
-        if is_running; then return 0; fi
-        sleep 3
-    done
     return 1
 }
 
 if is_running; then
-    log_ok "OoklaServer BERJALAN."
-    # Deteksi IP publik...
-    public_ip="$(curl -4 -s --max-time 10 https://api64.ipify.org 2>/dev/null || true)"
-    [ -n "$public_ip" ] || public_ip="$(curl -6 -s --max-time 10 https://api64.ipify.org 2>/dev/null || true)"
-    if [ -n "$public_ip" ]; then
-        log_info "IP publik terdeteksi: $public_ip"
-        if curl -s --max-time 10 "http://$public_ip:8080" 2>/dev/null | grep -qi "OoklaServer"; then
-            log_ok "OoklaServer dapat diakses di $public_ip:8080."
-        else
-            log_warn "OoklaServer berjalan; port 8080 belum terverifikasi dari luar (normal jika di balik firewall/NAT)."
-        fi
-    else
-        log_info "IP publik tidak terdeteksi (lewati verifikasi eksternal)."
-    fi
+    log_ok "OoklaServer BERJALAN NORMAL."
 else
-    log_warn "OoklaServer belum terdeteksi berjalan. Mencoba restart ulang..."
+    log_warn "Server belum merespon. Mencoba restart paksa..."
     ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart ) || true
-    if wait_for_running; then
-        log_ok "OoklaServer berjalan setelah restart."
-    else
-        log_error "OoklaServer masih belum berjalan. Cek log: $LOG_FILE"
-        log_info "Tips: Gunakan './speedtestctl.sh restart' secara manual jika server booting lambat."
-    fi
+    sleep 10
+    is_running && log_ok "OoklaServer BERJALAN." || log_error "Gagal start otomatis. Periksa log: $LOG_FILE"
 fi
 
 print_hash 50
-log_ok "Instalasi OoklaServer selesai!"
-log_info "BASE_DIR        : $BASE_DIR"
-log_info "Properties      : $OOKLA_PROPERTIES"
-log_info "Management tool : $BASE_DIR/speedtestctl.sh"
+log_ok "PROSES SELESAI."
+log_info "BASE_DIR : $BASE_DIR"
+log_info "Control  : ./speedtestctl.sh {status|restart|logs}"
 print_hash 50

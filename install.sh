@@ -109,27 +109,24 @@ ensure_support_files() {
     local f
     _boot_info "Menyelaraskan file pendukung di BASE_DIR..."
     for f in $SUPPORT_FILES; do
-        # JANGAN menimpa install.sh yang sedang berjalan secara langsung (Self-Overwrite Bug)
-        if [ "$f" = "install.sh" ] && [ -f "$BASE_DIR/install.sh" ]; then
-            # Cek apakah file yang dijalankan adalah file ini
-            if [ "$SPEEDTEST_SCRIPT_DIR/install.sh" = "$BASE_DIR/install.sh" ]; then
-                continue
-            fi
-        fi
-
         # Prioritas: 
         # 1. Jika ada di direktori script saat ini (dan bukan BASE_DIR), salin.
         if [ "$SPEEDTEST_SCRIPT_DIR" != "$BASE_DIR" ] && [ -f "$SPEEDTEST_SCRIPT_DIR/$f" ]; then
             cp -f "$SPEEDTEST_SCRIPT_DIR/$f" "$BASE_DIR/$f"
         else
-            # 2. Unduh dari repo
-            _boot_info "Mengunduh $f ..."
-            _fetch "$REPO_RAW_BASE/$f" "$BASE_DIR/$f" || {
-                if [ ! -f "$BASE_DIR/$f" ]; then
-                    _boot_die "Gagal mengunduh $f dan file lokal tidak ada."
-                fi
-                _boot_err "Gagal memperbarui $f, menggunakan versi yang ada."
-            }
+            # 2. Unduh dari repo dengan metode ATOMIK (mencegah korupsi saat running)
+            _boot_info "Memeriksa/Mengunduh $f ..."
+            if [ "$f" = "install.sh" ]; then
+                # Khusus install.sh: unduh ke .tmp lalu mv agar tidak memutus proses yang sedang jalan
+                _fetch "$REPO_RAW_BASE/$f" "$BASE_DIR/$f.tmp" && mv -f "$BASE_DIR/$f.tmp" "$BASE_DIR/$f" || true
+            else
+                _fetch "$REPO_RAW_BASE/$f" "$BASE_DIR/$f" || {
+                    if [ ! -f "$BASE_DIR/$f" ]; then
+                        _boot_die "Gagal mengunduh $f dan file lokal tidak ada."
+                    fi
+                    _boot_err "Gagal memperbarui $f, menggunakan versi yang ada."
+                }
+            fi
         fi
     done
     chmod a+x "$BASE_DIR"/*.sh 2>/dev/null || true
