@@ -248,7 +248,7 @@ main() {
   install_zerotier || return 0
   verify_zerotier_service || return 0
   join_network || true
-  check_authorization
+  check_authorization || true
   enable_ip_forwarding
   setup_nat || true
   install_moon_updater
