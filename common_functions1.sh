@@ -238,6 +238,12 @@ load_and_validate_config() {
     APICloudFlare="$(ini_get APICloudFlare)"
     EmailCloudFlare="$(ini_get EmailCloudFlare)"
     RegisteredSpeedtestURL="$(ini_get RegisteredSpeedtestURL)"
+
+    # --- ZeroTier Config ---
+    ZeroTierNetworkID="$(ini_get ZeroTierNetworkID)"
+    ZeroTierMoonID="$(ini_get ZeroTierMoonID)"
+    ZeroTierMoonConfigURL="$(ini_get ZeroTierMoonConfigURL)"
+
     # Opsional: kontrol fitur ZeroTier dari data.ini (default mengikuti perilaku lama: Ya).
     local _zt_raw
     _zt_raw="$(ini_get AktifkanZeroTier)"
@@ -292,7 +298,8 @@ load_and_validate_config() {
     fi
 
     export ApakahDomainWildcard ApakahPakaiCloudflare Domain APICloudFlare \
-           EmailCloudFlare RegisteredSpeedtestURL AktifkanZeroTier
+           EmailCloudFlare RegisteredSpeedtestURL AktifkanZeroTier \
+           ZeroTierNetworkID ZeroTierMoonID ZeroTierMoonConfigURL
 
     # Ringkasan konfigurasi (token DISAMARKAN).
     log_ok "Konfigurasi valid:"
@@ -388,6 +395,49 @@ detect_init() {
     fi
     export INIT_SYSTEM
     log_info "Init system terdeteksi: $INIT_SYSTEM"
+}
+
+# -----------------------------------------------------------------------------
+# System Checks
+# -----------------------------------------------------------------------------
+check_resources() {
+    log_info "Memeriksa sumber daya sistem..."
+    # Minimal RAM 512MB disarankan untuk kelancaran.
+    local mem_total
+    mem_total=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
+    if [ "$mem_total" -gt 0 ] && [ "$mem_total" -lt 480 ]; then
+        log_warn "RAM sistem rendah ($mem_total MB). OoklaServer mungkin tidak stabil."
+    fi
+
+    # Cek sisa disk di BASE_DIR.
+    local disk_free
+    disk_free=$(df -m "$BASE_DIR" | awk 'NR==2 {print $4}' || echo 0)
+    if [ "$disk_free" -gt 0 ] && [ "$disk_free" -lt 100 ]; then
+        log_error "Sisa penyimpanan terlalu sedikit ($disk_free MB). Butuh minimal 100MB."
+        return 1
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Firewall Helpers
+# -----------------------------------------------------------------------------
+open_ports() {
+    log_info "Membuka port 80, 443, 8080, 5060 (TCP/UDP)..."
+    if command_exists ufw; then
+        ufw allow 80/tcp >/dev/null 2>&1 || true
+        ufw allow 443/tcp >/dev/null 2>&1 || true
+        ufw allow 8080/tcp >/dev/null 2>&1 || true
+        ufw allow 5060/tcp >/dev/null 2>&1 || true
+        ufw allow 8080/udp >/dev/null 2>&1 || true
+        ufw allow 5060/udp >/dev/null 2>&1 || true
+    elif command_exists firewall-cmd; then
+        firewall-cmd --permanent --add-port={80/tcp,443/tcp,8080/tcp,5060/tcp,8080/udp,5060/udp} >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    elif command_exists iptables; then
+        iptables -I INPUT -p tcp --match multiport --dports 80,443,8080,5060 -j ACCEPT 2>/dev/null || true
+        iptables -I INPUT -p udp --match multiport --dports 8080,5060 -j ACCEPT 2>/dev/null || true
+    fi
 }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }

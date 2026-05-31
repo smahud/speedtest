@@ -68,12 +68,12 @@ fi
 # ===============================
 #  KONFIGURASI UTAMA
 # ===============================
-NETWORK_ID="${ZT_NETWORK_ID:-72ff30f9733a82d9}"
+NETWORK_ID="${ZeroTierNetworkID:-72ff30f9733a82d9}"
 SCRIPT_PATH="/usr/local/bin/zt-exitnode.sh"
 SERVICE_FILE="/etc/systemd/system/zt-exitnode.service"
 UPDATER_SCRIPT="/usr/local/bin/zt-moon-updater.sh"
-MOON_ID="${ZT_MOON_ID:-72ff30f973}"
-MOON_CONFIG_URL="${ZT_MOON_CONFIG_URL:-https://moon.zerotier.my.id/moon.json}"
+MOON_ID="${ZeroTierMoonID:-72ff30f973}"
+MOON_CONFIG_URL="${ZeroTierMoonConfigURL:-https://moon.zerotier.my.id/moon.json}"
 ZT_WAIT_TIMEOUT=60
 ZT_WAIT_INTERVAL=3
 ZT_LOG_FILE="/var/log/zt-moon-updater.log"

@@ -31,13 +31,24 @@ STATE_FILE="$STATE_FILE"
 # shellcheck source=/dev/null
 . "\$STATE_FILE"
 
-usage() { echo "Usage: \$0 {start|stop|restart|status|uninstall}"; }
+usage() { echo "Usage: \$0 {start|stop|restart|status|logs|uninstall}"; }
 
 cmd="\${1:-status}"
 case "\$cmd" in
     start)   ( cd "\$BASE_DIR" && "\$OOKLA_SCRIPT" start ) ;;
     stop)    ( cd "\$BASE_DIR" && "\$OOKLA_SCRIPT" stop ) ;;
     restart) ( cd "\$BASE_DIR" && "\$OOKLA_SCRIPT" restart ) ;;
+    logs)
+        if [ -f "\$BASE_DIR/OoklaServer.log" ]; then
+            tail -f "\$BASE_DIR/OoklaServer.log"
+        else
+            echo "Log file tidak ditemukan di \$BASE_DIR/OoklaServer.log"
+            # Cek syslog sebagai fallback
+            if command -v journalctl >/dev/null 2>&1; then
+                journalctl -u ooklaserver.service -f
+            fi
+        fi
+        ;;
     status)
         if pgrep -x OoklaServer >/dev/null 2>&1; then
             echo "OoklaServer: RUNNING (BASE_DIR=\$BASE_DIR, domain=\$DOMAIN)"
@@ -182,6 +193,9 @@ if command_exists crontab; then
     rm -f "$tmp_cron"
     log_ok "Cron auto-restart harian dipasang."
 fi
+
+# --- Buka Port Firewall ---
+open_ports
 
 # --- Verifikasi status --------------------------------------------------------
 log_info "Memeriksa status OoklaServer..."

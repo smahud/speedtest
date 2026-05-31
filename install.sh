@@ -155,6 +155,9 @@ log_info "==================================================="
 detect_os
 detect_init
 
+# --- Periksa Sumber Daya ---
+check_resources || die "Sumber daya sistem tidak mencukupi."
+
 # --- Update index & install dependency dasar ----------------------------------
 log_info "Memperbarui index paket & memasang dependency dasar..."
 pkg_update

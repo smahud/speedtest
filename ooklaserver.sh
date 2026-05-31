@@ -37,11 +37,25 @@ detect_platform() {
 		server_package='macosx'
 		;;
 	Linux)
-		server_package='linux-aarch64-static-musl'
 		arch=$(uname -m)
-		if [ "$arch" = "x86_64" ]; then
-			server_package='linux-x86_64-static-musl'
-		fi
+		case "$arch" in
+			x86_64)
+				server_package='linux-x86_64-static-musl'
+				;;
+			aarch64|arm64)
+				server_package='linux-aarch64-static-musl'
+				;;
+			armv7l|armhf)
+				server_package='linux-armhf-static-musl'
+				;;
+			i386|i686)
+				server_package='linux-i386-static-musl'
+				;;
+			*)
+				echo "Unsupported architecture: $arch"
+				exit 1
+				;;
+		esac
 		;;
 	FreeBSD)
 		server_package='freebsd13_64'

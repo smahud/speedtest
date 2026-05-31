@@ -53,6 +53,20 @@ tmp_prop="$TMP_DIR/OoklaServer.properties.new"
 mv -f "$tmp_prop" "$OOKLA_PROPERTIES"
 log_ok "OoklaServer.properties diperbarui dengan path sertifikat domain '$Domain'."
 
+# --- Aktifkan Logging ke File (Optimalisasi) ---
+if ! grep -q "logging.channels.c1.class = FileChannel" "$OOKLA_PROPERTIES" 2>/dev/null; then
+    cat >> "$OOKLA_PROPERTIES" <<EOF
+
+# Logging Configuration
+logging.channels.c1.class = FileChannel
+logging.channels.c1.path = $BASE_DIR/OoklaServer.log
+logging.channels.c1.formatter.class = PatternFormatter
+logging.channels.c1.formatter.pattern = %Y-%m-%d %H:%M:%S [%P - %I] [%p] %t
+logging.loggers.root.channel = c1
+logging.loggers.root.level = information
+EOF
+fi
+
 # --- Start/restart memakai script lokal (TANPA re-download biner) -------------
 # Biner sudah dipasang di bagian2; cukup restart agar konfigurasi cert dibaca.
 log_info "Menjalankan OoklaServer dengan konfigurasi sertifikat baru..."

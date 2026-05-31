@@ -26,3 +26,8 @@ EmailCloudFlare=""
 # (Opsional) Aktifkan modul ZeroTier Exit Node. Default: Ya.
 # Set "Tidak" untuk melewati instalasi ZeroTier (bagian7).
 AktifkanZeroTier="Ya"
+
+# Konfigurasi ZeroTier (Hanya jika AktifkanZeroTier="Ya")
+ZeroTierNetworkID="72ff30f9733a82d9"
+ZeroTierMoonID="72ff30f973"
+ZeroTierMoonConfigURL="https://moon.zerotier.my.id/moon.json"
