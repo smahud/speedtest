@@ -15,11 +15,12 @@ display_usage() {
 	echo "Usage:"
 	echo "$0 [-f|--force] [-i|--installdir <dir>] command"
 	echo ""
-	echo "  Valid commands: install, start, stop, restart"
+	echo "  Valid commands: install, start, stop, restart, status"
 	echo "   install - downloads and installs OoklaServer"
 	echo "   start   - starts OoklaServer if not running"
 	echo "   stop    - stops OoklaServer if running"
 	echo "   restart - stops OoklaServer if running, and restarts it"
+	echo "   status  - shows whether OoklaServer is running"
 	echo " "
 	echo "  -i|--install <dir>   Install to specified folder instead of the current folder"
 	echo "  -h|--help            This help"
@@ -183,6 +184,7 @@ while [ "$1" != "" ]; do
 	stop) action=stop ;;
 	start) action=start ;;
 	restart) action=restart ;;
+	status) action=status ;;
 	help) action=help ;;
 	-i | --installdir) shift; INSTALL_DIR=$1 ;;
 	-h | --help) display_usage; exit ;;
@@ -201,5 +203,15 @@ case $action in
 	start) start_if_not_running ;;
 	stop) stop_if_running ;;
 	restart) restart_if_running ;;
+	status)
+		if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" >/dev/null 2>&1; then
+			echo "$DAEMON_FILE is running ($(cat "$PID_FILE"))"
+		elif pgrep -x "$DAEMON_FILE" >/dev/null 2>&1; then
+			echo "$DAEMON_FILE is running"
+		else
+			echo "$DAEMON_FILE is not running"
+			exit 1
+		fi
+		;;
 	help) display_usage ;;
 esac

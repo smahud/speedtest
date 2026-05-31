@@ -1,28 +1,87 @@
-# Bagian I
-# Cek apakah file data.ini sudah ada
-source /root/speedtest/common_functions1.sh
-source /root/data.ini
-echo "Melakukan input dari file data.ini"
-if [ -e "/root/data.ini" ]; then
-    echo "File data.ini ditemukan, melanjutkan perintah..."
-	print_hash 30
-else
-    echo "File data.ini tidak ditemukan. Skrip dihentikan."
-	print_hash 100
-    exit 1
-fi
-# Install Speedtest For Test
-mkdir -p /root/tmp
-wget -O /tmp/speedtest.tgz https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz
-tar -xvzf /tmp/speedtest.tgz -C /usr/local/bin speedtest
-chmod a+x /usr/local/bin/speedtest
+#!/usr/bin/env bash
+###############################################################################
+# bagian1_install_dependency.sh
+#   - Memasang Speedtest CLI (Ookla) untuk keperluan reporting.
+#   - Menulis kredensial Cloudflare untuk certbot (bila dipakai).
+#
+# Semua temp file mengikuti $TMP_DIR ($BASE_DIR/tmp). Token TIDAK dicetak.
+###############################################################################
+set -euo pipefail
+SPEEDTEST_SCRIPT_DIR="${SPEEDTEST_SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)}"
+export SPEEDTEST_SCRIPT_DIR
+# shellcheck source=common_functions1.sh
+. "$SPEEDTEST_SCRIPT_DIR/common_functions1.sh"
 
-# Sumberkan data.ini
-mkdir -p /etc/letsencrypt
-rm /etc/letsencrypt/dnscloudflare.ini
-tee /etc/letsencrypt/dnscloudflare.ini > /dev/null <<END
-#dns_cloudflare_email = $EmailCloudFlare
-dns_cloudflare_api_token = $APICloudFlare
-END
-##############################################################
-chmod 600 /etc/letsencrypt/dnscloudflare.ini
+# Inisialisasi mandiri bila dijalankan langsung.
+if [ -z "${BASE_DIR:-}" ]; then
+    resolve_config_path "${1:-}"; init_paths; detect_os; load_and_validate_config
+fi
+
+log_info "== Bagian 1: Dependency & Speedtest CLI =="
+
+# --- Pasang Speedtest CLI (idempotent) ----------------------------------------
+SPEEDTEST_CLI_URL="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz"
+SPEEDTEST_TGZ="$TMP_DIR/speedtest.tgz"
+
+if command_exists speedtest && speedtest --version >/dev/null 2>&1; then
+    log_ok "Speedtest CLI sudah terpasang, dilewati."
+else
+    # Sesuaikan arsitektur (x86_64 / aarch64).
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64|amd64) SPEEDTEST_CLI_URL="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-x86_64.tgz" ;;
+        aarch64|arm64) SPEEDTEST_CLI_URL="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-aarch64.tgz" ;;
+        armv7l|armhf)  SPEEDTEST_CLI_URL="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-armhf.tgz" ;;
+        i386|i686)     SPEEDTEST_CLI_URL="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-i386.tgz" ;;
+        *) log_warn "Arsitektur '$arch' tidak dikenali, mencoba paket x86_64." ;;
+    esac
+
+    log_info "Mengunduh Speedtest CLI ($arch)..."
+    mkdir -p /usr/local/bin
+    if wget -q -O "$SPEEDTEST_TGZ" "$SPEEDTEST_CLI_URL"; then
+        # Ekstrak hanya biner 'speedtest'. Beberapa arsip menaruh path berbeda,
+        # jadi pakai --strip-components bila perlu (best effort).
+        if tar -xzf "$SPEEDTEST_TGZ" -C /usr/local/bin speedtest 2>/dev/null; then
+            :
+        else
+            # fallback: ekstrak semua ke tmp lalu pindahkan binernya
+            tar -xzf "$SPEEDTEST_TGZ" -C "$TMP_DIR" 2>/dev/null || true
+            if [ -f "$TMP_DIR/speedtest" ]; then
+                mv -f "$TMP_DIR/speedtest" /usr/local/bin/speedtest
+            fi
+        fi
+        if [ -f /usr/local/bin/speedtest ]; then
+            chmod a+x /usr/local/bin/speedtest
+            rm -f "$SPEEDTEST_TGZ"
+            log_ok "Speedtest CLI terpasang di /usr/local/bin/speedtest."
+        else
+            log_warn "Biner speedtest tidak ditemukan setelah ekstraksi."
+        fi
+    else
+        log_warn "Gagal mengunduh Speedtest CLI. Reporting CLI mungkin tidak tersedia."
+    fi
+fi
+
+# --- Tulis kredensial Cloudflare untuk certbot --------------------------------
+if [ "${ApakahPakaiCloudflare:-Tidak}" = "Ya" ]; then
+    log_info "Menyiapkan kredensial Cloudflare untuk certbot..."
+    mkdir -p /etc/letsencrypt
+    CF_CRED="/etc/letsencrypt/dnscloudflare.ini"
+
+    # Tulis dengan umask ketat agar token tidak bocor lewat permission.
+    ( umask 077
+      {
+        if [ -n "${EmailCloudFlare:-}" ]; then
+            printf 'dns_cloudflare_email = %s\n' "$EmailCloudFlare"
+        fi
+        printf 'dns_cloudflare_api_token = %s\n' "$APICloudFlare"
+      } > "$CF_CRED"
+    )
+    chmod 600 "$CF_CRED"
+    chown root:root "$CF_CRED" 2>/dev/null || true
+    log_ok "Kredensial Cloudflare ditulis ke $CF_CRED (token: $(mask_secret "$APICloudFlare"))."
+else
+    log_info "Mode non-Cloudflare: melewati penulisan kredensial Cloudflare."
+fi
+
+log_ok "Bagian 1 selesai."

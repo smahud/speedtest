@@ -1,37 +1,68 @@
-# Bagian II
-# Memeriksa OoklaServer installation
-source /root/speedtest/common_functions1.sh
-if [ -e "/root/OoklaServer" ]; then
-echo "OoklaServer sudah terinstal. Melewati ke Bagian II."
-print_hash 30
-else
-echo "OoklaServer tidak ditemukan. Menjalankan Perintah Instalasi OoklaServer"
+#!/usr/bin/env bash
+###############################################################################
+# bagian2_install_ooklaserver.sh
+#   - Mengunduh & memasang OoklaServer ke $BASE_DIR (bukan /root).
+#   - Menyiapkan OoklaServer.properties dasar (idempotent).
+###############################################################################
+set -euo pipefail
+SPEEDTEST_SCRIPT_DIR="${SPEEDTEST_SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)}"
+export SPEEDTEST_SCRIPT_DIR
+# shellcheck source=common_functions1.sh
+. "$SPEEDTEST_SCRIPT_DIR/common_functions1.sh"
 
-#/root/speedtest/serverinstall.sh (lawas, tidak dipakai)
-#echo "Membuat file OoklaServer.properties "
-#cat <<EOF | sudo tee /root/OoklaServer.properties > /dev/null
-#OoklaServer.tcpPorts = 5060,8080
-#OoklaServer.udpPorts = 5060,8080
-#OoklaServer.useIPv6 = true
-#OoklaServer.allowedDomains = *.ookla.com, *.speedtest.net
-#OoklaServer.enableAutoUpdate = true
-#OoklaServer.ssl.useLetsEncrypt = true
-#logging.loggers.app.name = Application
-#logging.loggers.app.channel.class = ConsoleChannel
-#logging.loggers.app.channel.pattern = %Y-%m-%d %H:%M:%S [%P - %I] [%p] %t
-#logging.loggers.app.level = information
-#EOF
-
-cd 
-#cp /root/speedtest/ooklaserver.sh /root/ooklaserver.sh
-wget https://install.speedtest.net/ooklaserver/ooklaserver.sh
-chmod a+x /root/ooklaserver.sh
-/root/ooklaserver.sh install -f
-
-sed -i '/^# OoklaServer\.allowedDomains = \*\.ookla\.com, \*\.speedtest\.net/s/^# //' /root/OoklaServer.properties && \
-sed -i '/^# OoklaServer\.enableAutoUpdate/s/^# //' /root/OoklaServer.properties && \
-sed -i '/^# OoklaServer\.ssl\.useLetsEncrypt/s/^# //' /root/OoklaServer.properties
-
-echo "OoklaServer berhasil di install"
-print_hash 30
+if [ -z "${BASE_DIR:-}" ]; then
+    resolve_config_path "${1:-}"; init_paths; detect_os; load_and_validate_config
 fi
+
+log_info "== Bagian 2: Instalasi OoklaServer =="
+
+# Pastikan ooklaserver.sh tersedia di BASE_DIR.
+if [ ! -f "$OOKLA_SCRIPT" ]; then
+    if [ -f "$SCRIPT_DIR/ooklaserver.sh" ]; then
+        cp -f "$SCRIPT_DIR/ooklaserver.sh" "$OOKLA_SCRIPT"
+    else
+        log_info "Mengunduh ooklaserver.sh resmi..."
+        wget -q -O "$OOKLA_SCRIPT" "https://install.speedtest.net/ooklaserver/ooklaserver.sh" \
+            || die "Gagal mengunduh ooklaserver.sh"
+    fi
+fi
+chmod a+x "$OOKLA_SCRIPT"
+
+if [ -f "$OOKLA_BIN" ]; then
+    log_ok "OoklaServer sudah terpasang di $OOKLA_BIN. Melewati instalasi biner."
+else
+    log_info "Memasang OoklaServer ke $BASE_DIR ..."
+    # ooklaserver.sh memasang biner di CWD; jalankan dari BASE_DIR.
+    # Catatan: 'install -f' otomatis mencoba start daemon. Kita STOP lagi di
+    # bawah karena sertifikat belum dikonfigurasi (start asli di bagian5).
+    ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" install -f ) \
+        || die "Instalasi OoklaServer gagal."
+fi
+
+# Hentikan daemon yang mungkin baru saja start oleh 'install -f' agar tidak
+# berjalan dengan konfigurasi SSL yang belum lengkap (sertifikat menyusul).
+log_info "Menghentikan daemon sementara (sertifikat dikonfigurasi di bagian berikutnya)..."
+( cd "$BASE_DIR" && "$OOKLA_SCRIPT" stop ) >/dev/null 2>&1 || true
+
+# --- Aktifkan opsi penting di OoklaServer.properties (idempotent) -------------
+if [ -f "$OOKLA_PROPERTIES" ]; then
+    log_info "Menyesuaikan OoklaServer.properties..."
+    # Uncomment opsi default penting bila masih dikomentari.
+    sed -i 's/^# *\(OoklaServer\.allowedDomains[[:space:]]*=.*\)/\1/' "$OOKLA_PROPERTIES" || true
+    sed -i 's/^# *\(OoklaServer\.enableAutoUpdate.*\)/\1/' "$OOKLA_PROPERTIES" || true
+
+    # PENTING: JANGAN aktifkan useLetsEncrypt di sini. Kita memakai path
+    # sertifikat eksplisit (di-set bagian5). useLetsEncrypt=true tanpa cert
+    # membuat daemon gagal start. Pastikan baris itu dikomentari/dihapus.
+    sed -i 's/^\(OoklaServer\.ssl\.useLetsEncrypt[[:space:]]*=.*\)/# \1/' "$OOKLA_PROPERTIES" || true
+
+    # Pastikan allowedDomains ada (untuk verifikasi & sertifikat).
+    if ! grep -qE '^OoklaServer\.allowedDomains' "$OOKLA_PROPERTIES"; then
+        echo "OoklaServer.allowedDomains = *.ookla.com, *.speedtest.net" >> "$OOKLA_PROPERTIES"
+    fi
+    log_ok "OoklaServer.properties disiapkan."
+else
+    log_warn "OoklaServer.properties tidak ditemukan setelah instalasi."
+fi
+
+log_ok "Bagian 2 selesai."

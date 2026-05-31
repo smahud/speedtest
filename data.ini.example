@@ -1,0 +1,28 @@
+# WAJIB DI BACA DENGAN SEKSAMA
+# Data awal, isi data dulu bro
+#
+# Jika menggunakan domain wildcard, cukup isi dengan domain utama saja di kolom Domain
+# Contoh example.com
+#
+# Jika bukan wildcard, isi nama domain atau subdomain secara lengkap di kolom Domain
+# Contoh speedtest.example.com
+#
+# Wildcard CloudFlare wajib ambil yang API Global / API Token dengan akses Edit DNS
+# Wildcard selain CloudFlare harus update manual DNS, perhatikan perintah yang diberikan
+# Selain wildcard harus open port 80
+#
+# Pilih Ya atau Tidak
+
+ApakahDomainWildcard="Ya"
+ApakahPakaiCloudflare="Ya"
+Domain="example.com"
+APICloudFlare="ISI_TOKEN_CLOUDFLARE_DI_SINI"
+RegisteredSpeedtestURL="speedtest.example.com"
+
+# (Opsional) Email akun Cloudflare (untuk API Global Key). Boleh dikosongkan
+# jika memakai API Token modern.
+EmailCloudFlare=""
+
+# (Opsional) Aktifkan modul ZeroTier Exit Node. Default: Ya.
+# Set "Tidak" untuk melewati instalasi ZeroTier (bagian7).
+AktifkanZeroTier="Ya"

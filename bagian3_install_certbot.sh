@@ -1,94 +1,130 @@
-#!/bin/sh
+#!/usr/bin/env bash
+###############################################################################
+# bagian3_install_certbot.sh
+#   - Memasang certbot + plugin DNS Cloudflare (bila perlu) secara non-interaktif.
+#   - Idempotent: jika certbot sudah ada, dilewati.
+###############################################################################
+set -euo pipefail
+SPEEDTEST_SCRIPT_DIR="${SPEEDTEST_SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)}"
+export SPEEDTEST_SCRIPT_DIR
+# shellcheck source=common_functions1.sh
+. "$SPEEDTEST_SCRIPT_DIR/common_functions1.sh"
 
-# Sumber fungsi umum (pastikan file ini ada)
-source /root/speedtest/common_functions1.sh
-
-# Fungsi untuk memeriksa apakah suatu perintah ada
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-certbot_installed() {
-    command_exists certbot
-}
-
-# Cek apakah Certbot sudah terinstal
-if certbot_installed; then
-    echo "Certbot sudah terinstal, melewati langkah instalasi."
-    print_hash 30
-    sleep 1
-else
-    # Fungsi untuk menjalankan instalasi Certbot untuk Ubuntu/Debian
-    install_certbot_ubuntu() {
-        apt update
-        apt install -y snapd
-        snap install core
-        snap refresh core
-        snap install --classic certbot
-        ln -s /snap/bin/certbot /usr/bin/certbot
-        apt install -y certbot
-        snap set certbot trust-plugin-with-root=ok
-        snap install certbot-dns-cloudflare
-        apt install -y python3 python3-pip python3-certbot-dns-cloudflare
-        #pip install cloudflare==2.3.1 --break-system-packages
-        #pip install --upgrade cloudflare --break-system-packages
-    }
-
-    # Fungsi untuk menjalankan instalasi Certbot untuk CentOS/RHEL
-install_certbot_centos() {
-    yum install -y epel-release
-    yum install -y snapd
-    systemctl enable --now snapd.socket
-    ln -s /var/lib/snapd/snap /snap || true
-    sleep 1
-    snap install core
-    snap refresh core
-    snap install --classic certbot
-    snap set certbot trust-plugin-with-root=ok
-    snap install certbot-dns-cloudflare
-    ln -sf /snap/bin/certbot /usr/bin/certbot
-}
-
-    # Fungsi untuk menjalankan instalasi Certbot untuk openSUSE
-    install_certbot_opensuse() {
-        zypper install -y certbot
-        if ! command_exists certbot-dns-cloudflare; then
-            zypper install -y python3-certbot-dns-cloudflare
-        fi
-    }
-
-    # Fungsi untuk menjalankan instalasi Certbot untuk Alpine
-    install_certbot_alpine() {
-        apk update
-        apk add certbot certbot-dns-cloudflare
-
-    }
-
-    # Tentukan OS dan jalankan fungsi yang sesuai
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        case "$ID" in
-            ubuntu|debian)
-                install_certbot_ubuntu
-                ;;
-            centos|rhel|fedora)
-                install_certbot_centos
-                ;;
-            opensuse|suse)
-                install_certbot_opensuse
-                ;;
-            alpine)
-                install_certbot_alpine
-                ;;
-            *)
-                echo "Distribusi Linux tidak didukung."
-                print_hash 100
-                exit 1
-                ;;
-        esac
-    else
-        echo "Sistem operasi tidak dikenali."
-        print_hash 100
-        exit 1
-    fi
+if [ -z "${BASE_DIR:-}" ]; then
+    resolve_config_path "${1:-}"; init_paths; detect_os; load_and_validate_config
 fi
+
+log_info "== Bagian 3: Instalasi Certbot =="
+
+NEED_CF_PLUGIN="no"
+[ "${ApakahPakaiCloudflare:-Tidak}" = "Ya" ] && NEED_CF_PLUGIN="yes"
+
+cf_plugin_ok() {
+    # Plugin dianggap ada bila certbot mengenali --dns-cloudflare.
+    certbot plugins 2>/dev/null | grep -qi 'dns-cloudflare'
+}
+
+if command_exists certbot; then
+    if [ "$NEED_CF_PLUGIN" = "no" ] || cf_plugin_ok; then
+        log_ok "Certbot (dan plugin yang diperlukan) sudah terpasang. Dilewati."
+        exit 0
+    fi
+    log_info "Certbot ada, tetapi plugin Cloudflare belum. Memasang plugin..."
+fi
+
+install_certbot_debian() {
+    pkg_update
+    # Paket native (cukup untuk DNS Cloudflare di Debian/Ubuntu modern).
+    if [ "$NEED_CF_PLUGIN" = "yes" ]; then
+        pkg_install certbot python3-certbot-dns-cloudflare || true
+    else
+        pkg_install certbot || true
+    fi
+    # Fallback ke snap bila native gagal menyediakan plugin.
+    if ! command_exists certbot || { [ "$NEED_CF_PLUGIN" = "yes" ] && ! cf_plugin_ok; }; then
+        log_warn "Paket native tidak lengkap, mencoba snap..."
+        pkg_install snapd || true
+        command_exists snap && {
+            snap install core >/dev/null 2>&1 || true
+            snap refresh core >/dev/null 2>&1 || true
+            snap install --classic certbot >/dev/null 2>&1 || true
+            ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+            [ "$NEED_CF_PLUGIN" = "yes" ] && {
+                snap set certbot trust-plugin-with-root=ok >/dev/null 2>&1 || true
+                snap install certbot-dns-cloudflare >/dev/null 2>&1 || true
+            }
+        }
+    fi
+}
+
+install_certbot_rhel() {
+    pkg_install epel-release >/dev/null 2>&1 || true
+    pkg_update
+    if [ "$NEED_CF_PLUGIN" = "yes" ]; then
+        pkg_install certbot python3-certbot-dns-cloudflare || true
+    else
+        pkg_install certbot || true
+    fi
+    if ! command_exists certbot || { [ "$NEED_CF_PLUGIN" = "yes" ] && ! cf_plugin_ok; }; then
+        log_warn "Paket native tidak lengkap, mencoba snap..."
+        pkg_install snapd || true
+        if command_exists systemctl; then
+            systemctl enable --now snapd.socket >/dev/null 2>&1 || true
+        fi
+        ln -s /var/lib/snapd/snap /snap >/dev/null 2>&1 || true
+        sleep 2
+        command_exists snap && {
+            snap install core >/dev/null 2>&1 || true
+            snap refresh core >/dev/null 2>&1 || true
+            snap install --classic certbot >/dev/null 2>&1 || true
+            ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+            [ "$NEED_CF_PLUGIN" = "yes" ] && {
+                snap set certbot trust-plugin-with-root=ok >/dev/null 2>&1 || true
+                snap install certbot-dns-cloudflare >/dev/null 2>&1 || true
+            }
+        }
+    fi
+}
+
+install_certbot_alpine() {
+    # certbot-dns-cloudflare berada di repo 'community'. Pastikan aktif.
+    if [ "$NEED_CF_PLUGIN" = "yes" ] && [ -f /etc/apk/repositories ]; then
+        if ! grep -q '/community' /etc/apk/repositories 2>/dev/null; then
+            log_info "Mengaktifkan repo Alpine 'community' untuk plugin Cloudflare..."
+            echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/community" >> /etc/apk/repositories
+        fi
+    fi
+    pkg_update
+    if [ "$NEED_CF_PLUGIN" = "yes" ]; then
+        # Coba paket plugin; nama bisa berbeda antar versi Alpine.
+        pkg_install certbot py3-certbot-dns-cloudflare 2>/dev/null \
+            || pkg_install certbot certbot-dns-cloudflare 2>/dev/null \
+            || pkg_install certbot 2>/dev/null || true
+    else
+        pkg_install certbot || true
+    fi
+}
+
+install_certbot_suse() {
+    pkg_update
+    if [ "$NEED_CF_PLUGIN" = "yes" ]; then
+        pkg_install certbot python3-certbot-dns-cloudflare || true
+    else
+        pkg_install certbot || true
+    fi
+}
+
+case "$OS_FAMILY" in
+    debian) install_certbot_debian ;;
+    rhel)   install_certbot_rhel ;;
+    alpine) install_certbot_alpine ;;
+    suse)   install_certbot_suse ;;
+    *)      die "OS family '$OS_FAMILY' tidak didukung untuk instalasi certbot." ;;
+esac
+
+command_exists certbot || die "Certbot gagal dipasang."
+if [ "$NEED_CF_PLUGIN" = "yes" ] && ! cf_plugin_ok; then
+    die "Plugin certbot DNS Cloudflare gagal dipasang. Tidak bisa lanjut untuk mode Cloudflare wildcard."
+fi
+
+log_ok "Bagian 3 selesai (certbot siap)."
