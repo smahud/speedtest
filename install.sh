@@ -30,6 +30,7 @@ set -euo pipefail
 
 # Sumber file pendukung (bisa di-override via env REPO_RAW_BASE).
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/smahud/speedtest/main}"
+export REPO_RAW_BASE
 
 SUPPORT_FILES="
 common_functions1.sh
