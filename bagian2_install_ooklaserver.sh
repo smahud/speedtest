@@ -33,9 +33,8 @@ if [ -f "$OOKLA_BIN" ]; then
 else
     log_info "Memasang OoklaServer ke $BASE_DIR ..."
     # ooklaserver.sh memasang biner di CWD; jalankan dari BASE_DIR.
-    # Catatan: 'install -f' otomatis mencoba start daemon. Kita STOP lagi di
-    # bawah karena sertifikat belum dikonfigurasi (start asli di bagian5).
-    ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" install -f ) \
+    # Note: we call it with 'install' command. The '-f' is now supported/ignored.
+    ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" -f install ) \
         || die "Instalasi OoklaServer gagal."
 fi
 

@@ -166,7 +166,7 @@ case "$PKG_MGR" in
     apk)            CRON_PKG="cronie" ;;
 esac
 
-for pkg in bash git curl tar wget jq ca-certificates "$CRON_PKG"; do
+for pkg in bash git curl tar wget jq ca-certificates iptables "$CRON_PKG"; do
     if ! pkg_install "$pkg" >/dev/null 2>&1; then
         log_warn "Paket '$pkg' gagal/ tidak tersedia di $PKG_MGR (dilewati)."
     fi

@@ -91,17 +91,25 @@ zt_detect_os() {
 #  INSTALL ZEROTIER
 # ===============================
 install_zerotier() {
-    log_info "Menginstal ZeroTier dari installer resmi..."
-    if ! command -v curl >/dev/null 2>&1; then
-        pkg_update; pkg_install curl >/dev/null 2>&1 || true
-    fi
-    if curl -s https://install.zerotier.com 2>/dev/null | bash >/dev/null 2>&1; then
-        [ "$INIT_SYSTEM" = "systemd" ] && systemctl daemon-reload >/dev/null 2>&1 || true
-        log_ok "ZeroTier berhasil diinstal."
+    log_info "Menginstal ZeroTier..."
+    
+    if [ "$OS_FAMILY" = "alpine" ]; then
+        pkg_update
+        pkg_install zerotier-one || return 1
     else
-        log_error "Gagal menginstal ZeroTier! Cek koneksi internet."
-        return 1
+        log_info "Menggunakan installer resmi ZeroTier..."
+        if ! command -v curl >/dev/null 2>&1; then
+            pkg_update; pkg_install curl >/dev/null 2>&1 || true
+        fi
+        if curl -s https://install.zerotier.com 2>/dev/null | bash >/dev/null 2>&1; then
+            log_ok "ZeroTier berhasil diinstal."
+        else
+            log_error "Gagal menginstal ZeroTier via script! Mencoba via package manager..."
+            pkg_install zerotier-one || return 1
+        fi
     fi
+    
+    [ "$INIT_SYSTEM" = "systemd" ] && systemctl daemon-reload >/dev/null 2>&1 || true
     if [ "$INIT_SYSTEM" = "systemd" ]; then
         systemctl enable zerotier-one >/dev/null 2>&1 || true
         systemctl start zerotier-one >/dev/null 2>&1 || true

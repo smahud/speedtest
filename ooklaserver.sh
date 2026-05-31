@@ -178,7 +178,7 @@ start() {
 ##### Main
 
 action=help
-while [ "$1" != "" ]; do
+while [ "$#" -gt 0 ]; do
 	case $1 in
 	install) action=install ;;
 	stop) action=stop ;;
@@ -187,8 +187,18 @@ while [ "$1" != "" ]; do
 	status) action=status ;;
 	help) action=help ;;
 	-i | --installdir) shift; INSTALL_DIR=$1 ;;
+	-f | --force) ;; # Ignore force flag for compatibility
 	-h | --help) display_usage; exit ;;
-	*) display_usage; exit 1 ;;
+	*) 
+		# If it's a known command but was already set, just continue
+		# Otherwise if it looks like a flag, ignore it or handle it.
+		# To be robust, we only error if it's not a known flag.
+		if [ "${1#-}" = "$1" ]; then
+			# Not a flag, but not a recognized command either
+			display_usage; exit 1
+		fi
+		# It's an unrecognized flag, just ignore it for robustness
+		;;
 	esac
 	shift
 done
