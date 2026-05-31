@@ -199,8 +199,22 @@ open_ports
 
 # --- Verifikasi status --------------------------------------------------------
 log_info "Memeriksa status OoklaServer..."
-sleep 2
-if pgrep -x "OoklaServer" >/dev/null 2>&1; then
+# Beri waktu ekstra untuk inisialisasi pada sistem low-resource
+sleep 5
+
+is_running() {
+    # Check 1: Process exists
+    if pgrep -x "OoklaServer" >/dev/null 2>&1; then return 0; fi
+    # Check 2: Port is listening (fallback if pgrep fails in containers)
+    if command -v netstat >/dev/null 2>&1; then
+        if netstat -tuln 2>/dev/null | grep -q ":8080 "; then return 0; fi
+    elif command -v ss >/dev/null 2>&1; then
+        if ss -tuln 2>/dev/null | grep -q ":8080 "; then return 0; fi
+    fi
+    return 1
+}
+
+if is_running; then
     log_ok "OoklaServer BERJALAN."
     # Deteksi IP publik: coba IPv4 dulu, lalu IPv6 (host IPv6-only didukung).
     public_ip="$(curl -4 -s --max-time 10 https://api64.ipify.org 2>/dev/null || true)"
@@ -218,8 +232,8 @@ if pgrep -x "OoklaServer" >/dev/null 2>&1; then
 else
     log_warn "OoklaServer belum terdeteksi berjalan. Mencoba start ulang..."
     ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart ) || true
-    sleep 2
-    pgrep -x "OoklaServer" >/dev/null 2>&1 && log_ok "OoklaServer berjalan setelah restart." \
+    sleep 5
+    is_running && log_ok "OoklaServer berjalan setelah restart." \
         || log_error "OoklaServer masih belum berjalan. Cek log: $LOG_FILE"
 fi
 

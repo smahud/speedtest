@@ -411,15 +411,18 @@ check_resources() {
         mem_total=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
     fi
 
-    if [ "$mem_total" -gt 0 ] && [ "$mem_total" -lt 450 ]; then
-        log_warn "RAM sistem sangat rendah ($mem_total MB). OoklaServer mungkin gagal start atau tidak stabil."
+    # Peringatan RAM diturunkan ke 128MB (minimal mutlak untuk musl/alpine)
+    if [ "$mem_total" -gt 0 ] && [ "$mem_total" -lt 120 ]; then
+        log_warn "RAM sangat kritis ($mem_total MB). OoklaServer mungkin gagal start."
+    elif [ "$mem_total" -lt 400 ]; then
+        log_info "RAM terdeteksi $mem_total MB (kecil tapi cukup untuk Alpine)."
     fi
 
-    # Cek sisa disk di BASE_DIR (minimal 50MB untuk binary + log).
+    # Cek sisa disk di BASE_DIR (minimal 30MB cukup untuk binary + small logs).
     local disk_free
     disk_free=$(df -m "$BASE_DIR" | awk 'END{print $4}' || echo 0)
-    if [ "$disk_free" -gt 0 ] && [ "$disk_free" -lt 50 ]; then
-        log_error "Sisa penyimpanan di $BASE_DIR terlalu sedikit ($disk_free MB). Butuh minimal 50MB."
+    if [ "$disk_free" -gt 0 ] && [ "$disk_free" -lt 30 ]; then
+        log_error "Sisa penyimpanan di $BASE_DIR terlalu sedikit ($disk_free MB). Butuh minimal 30MB."
         return 1
     fi
     return 0

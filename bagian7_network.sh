@@ -94,6 +94,15 @@ install_zerotier() {
     log_info "Menginstal ZeroTier..."
     
     if [ "$OS_FAMILY" = "alpine" ]; then
+        # Pastikan repo community aktif sesuai versi Alpine yang sedang berjalan
+        local alpine_ver
+        alpine_ver=$(cut -d. -f1,2 /etc/alpine-release 2>/dev/null || echo "latest-stable")
+        if [ -f /etc/apk/repositories ]; then
+            if ! grep -q "/v$alpine_ver/community" /etc/apk/repositories; then
+                log_info "Menambahkan repo community v$alpine_ver..."
+                echo "https://dl-cdn.alpinelinux.org/alpine/v$alpine_ver/community" >> /etc/apk/repositories
+            fi
+        fi
         pkg_update
         pkg_install zerotier-one || return 1
     else
