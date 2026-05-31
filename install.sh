@@ -103,31 +103,28 @@ if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
     fi
 fi
 
-# --- Self-bootstrap: unduh file pendukung ke BASE_DIR bila belum ada ----------
-# Tentukan dari mana mengambil file: jika sudah ada di SCRIPT_DIR, pakai itu;
-# kalau tidak, unduh dari repo.
+# --- Self-bootstrap: unduh/perbarui file pendukung ke BASE_DIR -----------------
 ensure_support_files() {
-    local missing=0 f
+    local f
+    _boot_info "Menyelaraskan file pendukung di BASE_DIR..."
     for f in $SUPPORT_FILES; do
-        if [ ! -f "$BASE_DIR/$f" ]; then
-            missing=1
-            if [ -f "$SPEEDTEST_SCRIPT_DIR/$f" ] && [ "$SPEEDTEST_SCRIPT_DIR" != "$BASE_DIR" ]; then
-                cp -f "$SPEEDTEST_SCRIPT_DIR/$f" "$BASE_DIR/$f"
-            elif [ ! -f "$SPEEDTEST_SCRIPT_DIR/$f" ]; then
-                _boot_info "Mengunduh $f ..."
-                _fetch "$REPO_RAW_BASE/$f" "$BASE_DIR/$f" \
-                    || _boot_die "Gagal mengunduh $f dari $REPO_RAW_BASE. Cek koneksi internet."
-            fi
+        # Prioritas: 
+        # 1. Jika ada di direktori script saat ini (dan bukan BASE_DIR), salin.
+        # 2. Jika tidak ada atau untuk memastikan versi terbaru, unduh dari repo.
+        if [ "$SPEEDTEST_SCRIPT_DIR" != "$BASE_DIR" ] && [ -f "$SPEEDTEST_SCRIPT_DIR/$f" ]; then
+            cp -f "$SPEEDTEST_SCRIPT_DIR/$f" "$BASE_DIR/$f"
+        else
+            # Selalu coba unduh versi terbaru jika bukan dari git lokal
+            _boot_info "Mengunduh/memperbarui $f ..."
+            _fetch "$REPO_RAW_BASE/$f" "$BASE_DIR/$f" || {
+                if [ ! -f "$BASE_DIR/$f" ]; then
+                    _boot_die "Gagal mengunduh $f dan file lokal tidak ada."
+                fi
+                _boot_err "Gagal memperbarui $f, menggunakan versi yang ada."
+            }
         fi
     done
-    # Salin juga file yang ada di SCRIPT_DIR (mis. dijalankan dari folder repo).
-    if [ "$SPEEDTEST_SCRIPT_DIR" != "$BASE_DIR" ]; then
-        for f in $SUPPORT_FILES; do
-            [ -f "$SPEEDTEST_SCRIPT_DIR/$f" ] && cp -f "$SPEEDTEST_SCRIPT_DIR/$f" "$BASE_DIR/$f"
-        done
-    fi
     chmod a+x "$BASE_DIR"/*.sh 2>/dev/null || true
-    [ "$missing" -eq 1 ] && _boot_info "File pendukung siap di BASE_DIR ($BASE_DIR)."
     return 0
 }
 ensure_support_files

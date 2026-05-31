@@ -81,11 +81,17 @@ Tag `# managed` di belakang perintah cron diperlakukan literal oleh busybox
 crond (Alpine). **Fix:** tag ditulis sebagai baris komentar TERPISAH untuk
 semua cron (report, daily-restart, @reboot).
 
-### B15. (FIX) OpenRC double-daemonize
-Service OpenRC lama memakai `command_background="yes"` padahal biner Ookla
-sudah self-daemonize → pid kacau. **Fix:** service OpenRC kini memakai
-`start()/stop()/status()` yang memanggil `ooklaserver.sh` (konsisten dgn
-systemd & speedtestctl). Sudah diverifikasi lolos `dash -n`.
+### B16. (FIX) `ensure_support_files` tidak memperbarui file yang sudah ada
+Installer bootstrap hanya mengunduh file jika file tersebut tidak ada di disk. Hal ini menyebabkan update skrip (patch) tidak terunduh jika instalasi sebelumnya gagal.
+**Fix:** Skrip sekarang selalu mencoba menyelaraskan (sync/update) file pendukung ke versi terbaru dari repository saat proses bootstrap dijalankan.
+
+### B17. (FIX) Argumen parsing `ooklaserver.sh` tidak kompatibel BusyBox
+Loop parsing argumen sebelumnya memicu pesan `Usage` pada beberapa shell minimal.
+**Fix:** Menyederhanakan loop parsing argumen agar lebih robust dan mengabaikan flag `-f` secara eksplisit tanpa memicu error.
+
+### B18. (OPTIMASI) Paket `iptables` di Alpine
+Modul ZeroTier membutuhkan `iptables` untuk NAT.
+**Fix:** Memastikan paket `iptables` terpasang di Alpine via dependency dasar di `install.sh`.
 
 ## Status Verifikasi (diuji via harness mock end-to-end)
 - [x] Debian/Ubuntu: alur lengkap bagian0..8 OK, idempoten OK.

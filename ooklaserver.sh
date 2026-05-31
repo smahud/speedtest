@@ -193,26 +193,18 @@ start() {
 
 action=help
 while [ "$#" -gt 0 ]; do
-	case $1 in
+	case "$1" in
 	install) action=install ;;
-	stop) action=stop ;;
-	start) action=start ;;
+	stop)    action=stop ;;
+	start)   action=start ;;
 	restart) action=restart ;;
-	status) action=status ;;
-	help) action=help ;;
-	-i | --installdir) shift; INSTALL_DIR=$1 ;;
-	-f | --force) ;; # Ignore force flag for compatibility
-	-h | --help) display_usage; exit ;;
-	*) 
-		# If it's a known command but was already set, just continue
-		# Otherwise if it looks like a flag, ignore it or handle it.
-		# To be robust, we only error if it's not a known flag.
-		if [ "${1#-}" = "$1" ]; then
-			# Not a flag, but not a recognized command either
-			display_usage; exit 1
-		fi
-		# It's an unrecognized flag, just ignore it for robustness
-		;;
+	status)  action=status ;;
+	help)    action=help ;;
+	-i | --installdir) shift; INSTALL_DIR="$1" ;;
+	-f | --force)     ;; # Support -f but do nothing special as it's legacy
+	-h | --help)      display_usage; exit ;;
+	-*)               ;; # Ignore other flags starting with -
+	*)                ;; # Ignore other arguments
 	esac
 	shift
 done
