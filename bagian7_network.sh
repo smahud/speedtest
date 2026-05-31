@@ -97,24 +97,52 @@ install_zerotier() {
         # Pastikan repo community aktif sesuai versi Alpine yang sedang berjalan
         local alpine_ver
         alpine_ver=$(cut -d. -f1,2 /etc/alpine-release 2>/dev/null || echo "latest-stable")
+        
+        # Penanganan repository Alpine yang agresif & komprehensif
         if [ -f /etc/apk/repositories ]; then
-            if ! grep -q "/v$alpine_ver/community" /etc/apk/repositories; then
-                log_info "Menambahkan repo community v$alpine_ver..."
-                echo "https://dl-cdn.alpinelinux.org/alpine/v$alpine_ver/community" >> /etc/apk/repositories
-            fi
+            # Cadangkan file asli jika belum ada
+            [ -f /etc/apk/repositories.bak ] || cp /etc/apk/repositories /etc/apk/repositories.bak
+            
+            # Tambahkan repo yang diperlukan jika belum ada
+            local repo_added=0
+            for repo_url in \
+                "https://dl-cdn.alpinelinux.org/alpine/v$alpine_ver/community" \
+                "https://dl-cdn.alpinelinux.org/alpine/edge/community" \
+                "https://dl-cdn.alpinelinux.org/alpine/edge/testing"; do
+                if ! grep -q "$repo_url" /etc/apk/repositories; then
+                    echo "$repo_url" >> /etc/apk/repositories
+                    repo_added=1
+                fi
+            done
+            [ "$repo_added" -eq 1 ] && apk update
         fi
-        pkg_update
-        pkg_install zerotier-one || return 1
+        
+        # Coba install dengan berbagai metode
+        if apk add zerotier-one; then
+            log_ok "ZeroTier berhasil diinstal via apk."
+        else
+            log_error "Gagal menginstal ZeroTier via apk. Mencoba metode binary fallback..."
+            # Jika apk gagal, ZeroTier tidak menyediakan binary resmi untuk musl dengan mudah
+            # Jadi kita harus menyerah di sini untuk Alpine jika repo tidak ada.
+            return 1
+        fi
     else
         log_info "Menggunakan installer resmi ZeroTier..."
         if ! command -v curl >/dev/null 2>&1; then
             pkg_update; pkg_install curl >/dev/null 2>&1 || true
         fi
+        
+        # Gunakan official script untuk Debian/RedHat
         if curl -s https://install.zerotier.com 2>/dev/null | bash >/dev/null 2>&1; then
-            log_ok "ZeroTier berhasil diinstal."
+            log_ok "ZeroTier berhasil diinstal via installer resmi."
         else
             log_error "Gagal menginstal ZeroTier via script! Mencoba via package manager..."
-            pkg_install zerotier-one || return 1
+            if pkg_install zerotier-one; then
+                log_ok "ZeroTier berhasil diinstal via package manager."
+            else
+                log_error "Gagal menginstal ZeroTier."
+                return 1
+            fi
         fi
     fi
     
