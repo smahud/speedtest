@@ -108,14 +108,21 @@ ensure_support_files() {
     local f
     _boot_info "Menyelaraskan file pendukung di BASE_DIR..."
     for f in $SUPPORT_FILES; do
+        # JANGAN menimpa install.sh yang sedang berjalan secara langsung (Self-Overwrite Bug)
+        if [ "$f" = "install.sh" ] && [ -f "$BASE_DIR/install.sh" ]; then
+            # Cek apakah file yang dijalankan adalah file ini
+            if [ "$SPEEDTEST_SCRIPT_DIR/install.sh" = "$BASE_DIR/install.sh" ]; then
+                continue
+            fi
+        fi
+
         # Prioritas: 
         # 1. Jika ada di direktori script saat ini (dan bukan BASE_DIR), salin.
-        # 2. Jika tidak ada atau untuk memastikan versi terbaru, unduh dari repo.
         if [ "$SPEEDTEST_SCRIPT_DIR" != "$BASE_DIR" ] && [ -f "$SPEEDTEST_SCRIPT_DIR/$f" ]; then
             cp -f "$SPEEDTEST_SCRIPT_DIR/$f" "$BASE_DIR/$f"
         else
-            # Selalu coba unduh versi terbaru jika bukan dari git lokal
-            _boot_info "Mengunduh/memperbarui $f ..."
+            # 2. Unduh dari repo
+            _boot_info "Mengunduh $f ..."
             _fetch "$REPO_RAW_BASE/$f" "$BASE_DIR/$f" || {
                 if [ ! -f "$BASE_DIR/$f" ]; then
                     _boot_die "Gagal mengunduh $f dan file lokal tidak ada."
@@ -138,6 +145,15 @@ export SPEEDTEST_SCRIPT_DIR
 # shellcheck source=common_functions1.sh
 . "$BASE_DIR/common_functions1.sh"
 
+# Verifikasi integritas pustaka
+if ! command -v check_resources >/dev/null 2>&1; then
+    _boot_err "Pustaka common_functions1.sh tidak dimuat dengan benar atau versi lama terdeteksi."
+    _boot_info "Mencoba pembersihan sisa file lama..."
+    rm -f "$BASE_DIR/common_functions1.sh"
+    ensure_support_files
+    . "$BASE_DIR/common_functions1.sh"
+fi
+
 # Re-resolve secara resmi (mengisi semua variabel path turunan).
 resolve_config_path "$CONFIG_PATH"
 init_paths
@@ -153,7 +169,11 @@ detect_os
 detect_init
 
 # --- Periksa Sumber Daya ---
-check_resources || die "Sumber daya sistem tidak mencukupi."
+if command -v check_resources >/dev/null 2>&1; then
+    check_resources || die "Sumber daya sistem tidak mencukupi."
+else
+    log_warn "Fungsi check_resources tidak ditemukan, melewati pemeriksaan sumber daya."
+fi
 
 # --- Update index & install dependency dasar ----------------------------------
 log_info "Memperbarui index paket & memasang dependency dasar..."

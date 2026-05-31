@@ -402,18 +402,24 @@ detect_init() {
 # -----------------------------------------------------------------------------
 check_resources() {
     log_info "Memeriksa sumber daya sistem..."
-    # Minimal RAM 512MB disarankan untuk kelancaran.
-    local mem_total
-    mem_total=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
-    if [ "$mem_total" -gt 0 ] && [ "$mem_total" -lt 480 ]; then
-        log_warn "RAM sistem rendah ($mem_total MB). OoklaServer mungkin tidak stabil."
+    
+    # Deteksi RAM. Pakai /proc/meminfo jika 'free' tidak konsisten.
+    local mem_total=0
+    if [ -f /proc/meminfo ]; then
+        mem_total=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024)}')
+    else
+        mem_total=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
     fi
 
-    # Cek sisa disk di BASE_DIR.
+    if [ "$mem_total" -gt 0 ] && [ "$mem_total" -lt 450 ]; then
+        log_warn "RAM sistem sangat rendah ($mem_total MB). OoklaServer mungkin gagal start atau tidak stabil."
+    fi
+
+    # Cek sisa disk di BASE_DIR (minimal 50MB untuk binary + log).
     local disk_free
-    disk_free=$(df -m "$BASE_DIR" | awk 'NR==2 {print $4}' || echo 0)
-    if [ "$disk_free" -gt 0 ] && [ "$disk_free" -lt 100 ]; then
-        log_error "Sisa penyimpanan terlalu sedikit ($disk_free MB). Butuh minimal 100MB."
+    disk_free=$(df -m "$BASE_DIR" | awk 'END{print $4}' || echo 0)
+    if [ "$disk_free" -gt 0 ] && [ "$disk_free" -lt 50 ]; then
+        log_error "Sisa penyimpanan di $BASE_DIR terlalu sedikit ($disk_free MB). Butuh minimal 50MB."
         return 1
     fi
     return 0
