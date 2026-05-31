@@ -248,7 +248,6 @@ fi
 
 # VERIFIKASI: pastikan identity tetap ada
 if [ -d /var/lib/zerotier-one ]; then
-  local ZT_ID_COUNT
   ZT_ID_COUNT=$(ls /var/lib/zerotier-one/identity.* 2>/dev/null | wc -l)
   log_ok "/var/lib/zerotier-one DISIMPAN ($ZT_ID_COUNT file identity) — Node ID TETAP."
 else
