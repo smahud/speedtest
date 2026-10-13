@@ -1,5 +1,32 @@
 # Ringkasan Perubahan (Revisi Path-Aware)
 
+## v8.1.0 — ZeroTier hardcode, hosts localhost, auto-update, SSH kunci GitHub + audit menyeluruh
+Ringkas (rincian lengkap: `LAPORAN_IMPLEMENTASI_v8.md`):
+
+1. **ZeroTier hardcode & WAJIB.** Semua input ZeroTier dihapus dari `data.ini`;
+   nilai (Network ID, Moon, exit node) dipusatkan di `speedtest-repo.conf`.
+   Instalasi GAGAL bila node belum di-authorize di controller (pesan jelas).
+   Binary ZeroTier diverifikasi SHA-256 sebelum dipasang.
+2. **Mapping `RegisteredSpeedtestURL` → localhost.** Blok `# speedtest-managed`
+   ditulis ke `/etc/hosts` (dapat diubah via `HOSTS_FILE`), idempotent, dan
+   aman ketika `/etc/hosts` adalah mount point (kasus Docker).
+3. **Self-update otomatis tanpa pekerjaan manual.** `speedtest-selfupdate.sh`
+   + cron harian, checksum SHA-256 per file, gerbang `bash -n`, staging,
+   lock, backup terotasi, dan re-exec installer bila `install.sh` ikut berubah.
+4. **Akses SSH siap pakai.** Kunci publik dari `https://github.com/smahud.keys`
+   dipasang ke `authorized_keys` (blok penanda), drop-in sshd
+   `99-speedtest-managed.conf` diuji dengan `sshd -t` + rollback otomatis.
+5. **Audit menyeluruh + perbaikan bug** yang ditemukan saat uji:
+   cron ganda (bagian6 tidak idempotent), `bagian8` mati karena `grep -v` di
+   bawah `set -e`, parser config `uninstall.sh` menelan komentar inline,
+   entri `@reboot` salah-strip sehingga menghapus cron lain, paket cron tidak
+   pernah di-*enable*, `getent` tidak portabel, dan celah dependensi lain.
+6. **Verifikasi otomatis** di akhir instalasi (OoklaServer, hosts, kunci SSH,
+   cron, daemon cron, ZeroTier) + uji E2E 73/73 di namespace mock
+   (`tests/e2e_install_test.sh`), ShellCheck bersih, dan audit dependensi
+   (`tools/audit_cmd_deps.py`) tanpa temuan.
+
+
 ## Update lanjutan (self-bootstrap + sertifikat interaktif non-CF)
 - **install.sh self-bootstrap**: cukup unduh SATU file `install.sh` (mis.
   `wget bit.ly/ooklaserverlinux`). Script otomatis mengunduh file pendukung

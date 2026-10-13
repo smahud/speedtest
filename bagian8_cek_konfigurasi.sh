@@ -157,7 +157,16 @@ OPENRCEOF
 
 setup_fallback() {
   log_warn "Init system tidak terdeteksi. Menggunakan Cron @reboot."
-  (crontab -l 2>/dev/null | grep -v "$OOKLA_SCRIPT"; echo "@reboot cd $BASE_DIR && $OOKLA_SCRIPT start") | crontab -
+  if ! command_exists crontab; then
+    log_warn "crontab tidak tersedia — fallback @reboot dilewati."
+    return 0
+  fi
+  if cron_apply "# speedtest-boot-fallback (managed)" \
+       "@reboot cd $BASE_DIR && $OOKLA_SCRIPT start"; then
+    log_ok "Cron @reboot fallback terpasang (idempotent)."
+  else
+    log_warn "Gagal memasang cron @reboot fallback."
+  fi
 }
 
 case "$INIT_SYSTEM" in
@@ -167,9 +176,16 @@ case "$INIT_SYSTEM" in
 esac
 
 # --- Cron Daily Restart ---
-CRON_TAG="# ookla-daily-restart"
-(crontab -l 2>/dev/null | grep -v "$CRON_TAG" | grep -v "$OOKLA_SCRIPT restart"; echo "$CRON_TAG"; echo "0 0 * * * cd $BASE_DIR && $OOKLA_SCRIPT restart") | crontab - 2>/dev/null
-log_ok "Cron daily restart aktif."
+if ! command_exists crontab; then
+  log_warn "crontab tidak tersedia — daily restart dilewati."
+else
+  if cron_apply "# ookla-daily-restart" \
+       "0 0 * * * cd $BASE_DIR && $OOKLA_SCRIPT restart"; then
+    log_ok "Cron daily restart aktif (idempotent)."
+  else
+    log_warn "Gagal memasang cron daily restart."
+  fi
+fi
 
 # --- Konfigurasi Firewall ---
 open_ports

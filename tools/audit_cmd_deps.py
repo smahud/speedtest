@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""audit_cmd_deps.py — Audit statis ketergantungan perintah (dev tool, bukan bagian instalasi).
+
+Tujuan: memastikan SETIAP perintah eksternal yang dipakai skrip installer punya
+jalur otomatis, sehingga klaim "satu perintah install = semua dependensi terpasang"
+bisa diverifikasi, bukan sekadar diasumsikan.
+
+Cara kerja:
+  1. Pindai semua .sh di repo (heredoc dibuang, komentar dibuang).
+  2. Ambil token pada POSISI PERINTAH saja: awal baris, setelah | || && ; $( ` ,
+     setelah if/then/do/while/until/else/!/time/sudo/env.
+  3. Buang assignment (VAR=...), nama fungsi repo, dan builtin shell.
+  4. Bandingkan dengan:
+       - paket yang dipasang installer (BASE_PKGS di install.sh + apt/apk/yum/zypper),
+       - daftar aman (coreutils/POSIX yang pasti ada di semua distro target),
+       - perintah opsional yang WAJIB diawali guard (dicek 'command_exists'/'-v').
+  5. Laporkan perintah yang tidak masuk kategori mana pun → indikasi "lubang dependensi".
+
+Pakai:  python3 tools/audit_cmd_deps.py     (exit 1 bila ada temuan)
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# ── A. Perintah POSIX/coreutils yang ADA di semua distro target ────────────────
+SAFE = {
+    "free", "sysctl", "pgrep", "pkill", "logger", "flock", "timeout", "openssl",
+    "echo", "printf", "read", "cd", "exit", "return", "local", "export", "unset",
+    "set", "shift", "eval", "exec", "source", "test", "let", "trap", "umask",
+    "wait", "type", "hash", "command", "ulimit", "times", "pwd", "break",
+    "continue", "true", "false", "declare", "shopt", "readarray", "mapfile",
+    "cat", "cp", "mv", "rm", "ln", "mkdir", "rmdir", "chmod", "chown", "touch",
+    "ls", "df", "du", "dd", "sync", "stat", "mktemp", "install", "readlink",
+    "realpath", "basename", "dirname", "sed", "awk", "grep", "egrep", "fgrep",
+    "sort", "uniq", "head", "tail", "cut", "tr", "wc", "tee", "xargs", "env",
+    "find", "cmp", "diff", "which", "seq", "expr", "sleep", "kill", "ps", "pgrep",
+    "pkill", "id", "whoami", "groups", "date", "hostname", "uname", "getent",
+    "sha256sum", "sha1sum", "md5sum", "tar", "gzip", "gunzip", "zip", "unzip",
+    "openssl", "sh", "bash", "dash", "sudo", "su", "logname", "users", "w",
+    "timeout", "flock", "nohup", "setsid", "mktemp", "install", "ip", "ifconfig",
+    "route", "ss", "netstat", "dig", "nslookup", "host", "ping", "curl", "wget",
+    "hostnamectl", "locale", "iconv", "comm", "join", "paste", "split", "csplit",
+    "tac", "nl", "od", "shred", "truncate", "mknod", "mkfifo", "sync", "wall",
+}
+
+# ── B. Perintah yang WAJIB punya guard `command_exists`/`-v` di skrip ──────────
+# Perintah yang boleh dipakai TANPA guard bila file-nya melakukan dispatch
+# berdasarkan variabel yang dideteksi (Package manager / init system).
+DISPATCH_VARS = ("PKG_MGR", "INIT_SYSTEM", "OS_FAMILY", "OS_ID", "PKG_INSTALL")
+DISPATCHABLE = {
+    "firewall-cmd", "apk", "apt", "apt-get", "dnf", "yum", "zypper", "pacman", "xbps-install",
+    "systemctl", "rc-service", "rc-update", "service", "update-rc.d",
+    "chkconfig", "journalctl", "certbot", "snap", "sysctl", "iptables",
+}
+
+OPTIONAL_REQUIRES_GUARD = {
+    "nft", "ufw", "restorecon", "semanage", "snap", "systemd-run", "rc-service",
+    "rc-update", "service", "update-rc.d", "chkconfig", "journalctl", "systemctl",
+    "certbot", "zerotier-cli", "zerotier-one", "iptables", "sysctl", "crontab",
+    "sshd", "ssh-keygen", "crontab", "mariadb", "mysql", "logrotate", "ufw",
+    "apk", "apt-get", "apt", "dnf", "yum", "zypper", "pacman", "xbps-install",
+    "pip3", "python3", "pip", "systemd-run", "semanage", "modprobe", "nft",
+}
+
+HEREDOC_RE = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+SEP_RE = re.compile(r"\|\||&&|;;|;|\||\(|\)|\$\(|`|&")
+PREFIX_RE = re.compile(
+    r"^(?:if|then|else|elif|do|while|until|!|time|sudo|env(?:\s+\w+=\S+)*)\s+"
+)
+CMDNAME_RE = re.compile(r"^([A-Za-z][\w.+-]*)")
+SHELL_KEYWORDS = {
+    "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
+    "case", "esac", "in", "function", "select", "time", "{", "}", "[[", "]]",
+}
+CASE_LIST_RE = re.compile(r"(?m)^\s*(?:[A-Za-z0-9_*?.\[\]-]+\|)*[A-Za-z0-9_*?.\[\]-]+\)\s*")
+
+# Token yang muncul dari teks pesan/heredoc setelah masking (bukan perintah).
+# Setiap penambahan ke daftar ini harus disertai alasan singkat.
+NOISE = {
+    # nama file/host/artefak produk (sering jadi argumen/teks pesan)
+    "OoklaServer", "OoklaServer.pid", "OoklaServer.properties",
+    "OoklaServer.properties.default", "Speedtest", "Sertifikat", "Domain",
+    "Port", "Network", "Node", "ZeroTier", "Alpine", "Debian", "Linux",
+    "Darwin", "FreeBSD", "Docker", "Uninstall", "Self-update", "Re-exec",
+    "Verifikasi", "Idempotensi", "Instalasi", "Jalankan", "Uji", "Kasus",
+    "Cukup", "OK", "otomatis", "hosts", "logs", "restart", "uninstall",
+    "version", "help", "status", "fetch", "identity", "backup", "user",
+    "file", "rule", "nilai", "mungkin", "untuk", "sama", "valid", "drop-in",
+    "kunci", "konfigurasi", "kredensial", "detail", "virtual/hostname",
+    # nama arsitektur/kode distro (label 'case')
+    "aarch64", "x86_64", "i386", "i686", "arm64", "armhf", "armv7l",
+    "alpine", "debian", "rhel", "suse", "ubuntu", "rocky", "almalinux",
+    "centos", "fedora", "opensuse", "systemd", "openrc", "busybox",
+    # sub-perintah CLI yang terbaca sebagai kata pertama argumen
+    "authorize", "list", "listnetworks", "orbit", "cek", "bagian4",
+}
+
+def strip_inline_comment(code: str) -> str:
+    """Potong komentar '#' (di luar tanda kutip) dari satu baris kode."""
+    out = []
+    quote = None
+    i = 0
+    while i < len(code):
+        c = code[i]
+        if quote is not None:
+            out.append(c)
+            if c == "\\" and i + 1 < len(code):
+                out.append(code[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "\"'":
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "#" and (i == 0 or code[i - 1].isspace()):
+            break
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def mask_quotes(text: str) -> str:
+    """Ganti isi string ('...' / "...") dengan spasi agar teks pesan tidak
+    terbaca sebagai perintah. Isi '$(...)' di dalam string tetap diproses."""
+    out = []
+    i = 0
+    quote = None
+    while i < len(text):
+        c = text[i]
+        if quote is not None:
+            if c == "\\":
+                out.append("  ")
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+                out.append(" ")
+                i += 1
+                continue
+            if text.startswith("$(", i):
+                depth = 0
+                j = i
+                while j < len(text):
+                    if text[j] == "(":
+                        depth += 1
+                    elif text[j] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                inner = text[i + 2:j] if j < len(text) else text[i + 2:]
+                out.append(" " + mask_quotes(inner) + " ")
+                i = j + 1
+                continue
+            out.append(" ")
+            i += 1
+            continue
+        if c in "\"'":
+            quote = c
+            out.append(" ")
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def iter_commands(path: str):
+    """Hasilkan (nomor_baris, nama_perintah) pada posisi perintah."""
+    heredoc = None
+    in_string = False  # None | "dq" | "sq"
+    pending: list[str] = []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for lineno, raw in enumerate(fh):
+            line = raw.rstrip("\n")
+            if heredoc is not None:
+                if line.strip() == heredoc:
+                    heredoc = None
+                continue
+            m = HEREDOC_RE.search(line)
+            if m:
+                heredoc = m.group(1)
+            # 1) Buang komentar inline (di luar tanda kutip), baru analisis.
+            code = strip_inline_comment(line)
+            if not code.strip():
+                continue
+            # 2) Lewati isi string multi-baris (body awk/sed atau teks pesan).
+            n_dq = len(re.findall(r'(?<!\\)"', code))
+            n_sq = len(re.findall(r"(?<!\\)'", code))
+            if in_string:
+                if (n_dq % 2 == 1) or (in_string == "sq" and n_sq % 2 == 1):
+                    in_string = False
+                continue
+            if n_dq % 2 == 1 and not code.rstrip().endswith("\\"):
+                in_string = "dq"
+            elif n_sq % 2 == 1 and re.search(r"\b(awk|sed|perl)\b[^']*'", code):
+                # body awk/sed multi-baris
+                in_string = "sq"
+            # 3) Buang parameter expansion ${...} (berisi pesan, bukan perintah)
+            code = re.sub(r"\$\{[^{}]*\}", "", code)
+            # gabung baris lanjutan (backslash) supaya pipeline tetap terbaca
+            pending.append(code)
+            if code.rstrip().endswith("\\"):
+                continue
+            text = " ".join(pending)
+            pending = []
+            masked = CASE_LIST_RE.sub("", mask_quotes(text))
+            for seg in SEP_RE.split(masked):
+                seg = seg.strip()
+                if not seg:
+                    continue
+                while True:
+                    new = PREFIX_RE.sub("", seg, count=1)
+                    if new == seg:
+                        break
+                    seg = new.strip()
+                label = re.match(r"([A-Za-z_][\w.|*-]*)\)\s*", seg)
+                if label:
+                    seg = seg[label.end():].strip()
+                if not seg or seg.startswith("-"):
+                    continue
+                mm = CMDNAME_RE.match(seg)
+                if not mm:
+                    continue
+                name = mm.group(1).rstrip(".-+")
+                if name in SHELL_KEYWORDS:
+                    continue
+                if name in NOISE or name.lower() in {n.lower() for n in NOISE}:
+                    continue
+                # lewati label 'case' (mis. AUTO_UPDATE_ENABLED) & konstanta huruf besar
+                if re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+                    continue
+                # lewati assignment (VAR=...) dan definisi fungsi (nama()
+                rest = seg[mm.end():]
+                if rest.startswith("=") or rest.startswith("()"):
+                    continue
+                yield lineno + 1, name
+
+
+def repo_functions(files):
+    funcs = set()
+    for path in files:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = re.match(r"\s*(?:function\s+)?([A-Za-z_]\w*)\s*\(\)\s*\{?", line)
+                if m:
+                    funcs.add(m.group(1))
+    return funcs
+
+
+def installer_packages():
+    pkgs = set()
+    src = os.path.join(REPO, "install.sh")
+    txt = open(src, encoding="utf-8", errors="replace").read() if os.path.exists(src) else ""
+    for block in re.findall(r"BASE_PKGS=\((.*?)^\)", txt, re.S | re.M):
+        for line in block.splitlines():
+            line = line.split("#")[0].strip().strip('"\'')
+            pkgs.update(t for t in line.split() if t)
+    # paket yang muncul di blok pemasangan per distro
+    for line in txt.splitlines():
+        if re.search(r"(apt-get|apk|dnf|yum|zypper)\b.*install", line):
+            for tok in re.findall(r"[a-z0-9][a-z0-9.+-]{2,}", line):
+                if tok not in {"install", "update", "upgrade", "yes", "dev", "null",
+                               "quiet", "force", "auto", "get", "apt", "apk", "dnf",
+                               "yum", "zypper", "add", "repo", "no", "and", "or",
+                               "if", "then", "fi", "bash", "log", "info"}:
+                    pkgs.add(tok)
+    return pkgs
+
+
+def main() -> int:
+    files = []
+    for root, dirs, names in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in {".git", "legacy", "versions", "node_modules"}]
+        for n in names:
+            if n.endswith(".sh"):
+                files.append(os.path.join(root, n))
+    files.sort()
+
+    funcs = repo_functions(files)
+    pkgs = installer_packages()
+    allowed = SAFE | pkgs | funcs
+
+    unguarded = {}
+    guarded = {}
+    dispatched = {}
+    unknown = {}
+    for path in files:
+        rel = os.path.relpath(path, REPO)
+        if rel.startswith("tools/") and rel.endswith(".sh"):
+            continue  # tools dev tidak ikut instalasi
+        text = open(path, encoding="utf-8", errors="replace").read()
+        for lineno, cmd in iter_commands(path):
+            if cmd in allowed or cmd.startswith("$"):
+                continue
+            if cmd in OPTIONAL_REQUIRES_GUARD or cmd in DISPATCHABLE:
+                # cek apakah ada guard di sekitar file ini
+                if re.search(rf"command_exists\s+{cmd}\b|command\s+-v\s+{cmd}\b", text):
+                    guarded.setdefault(cmd, set()).add(rel)
+                elif cmd in DISPATCHABLE and any(v in text for v in DISPATCH_VARS):
+                    dispatched.setdefault(cmd, set()).add(rel)
+                else:
+                    unguarded.setdefault(cmd, []).append(f"{rel}:{lineno}")
+            else:
+                unknown.setdefault(cmd, []).append(f"{rel}:{lineno}")
+
+    print("=== A. Paket yang dipasang otomatis oleh installer ===")
+    print("   " + ", ".join(sorted(pkgs)) or "   (kosong)")
+    print()
+
+    print(f"=== B. Perintah opsional dengan guard 'command -v': {len(guarded)} ===")
+    print("   " + ", ".join(sorted(guarded)))
+    print()
+    print(f"=== B2. Perintah via dispatch (PKG_MGR/INIT_SYSTEM, bukan perintah buta): {len(dispatched)} ===")
+    print("   " + ", ".join(sorted(dispatched)))
+    print()
+
+    bad = False
+    if unguarded:
+        bad = True
+        print("=== C. MASALAH: perintah opsional TANPA guard ===")
+        for cmd in sorted(unguarded):
+            print(f"   - {cmd:<16} {', '.join(unguarded[cmd][:5])}")
+        print()
+
+    if unknown:
+        print("=== D. INFORMASI: token di luar daftar aman — tinjau manual ===")
+        for cmd in sorted(unknown):
+            locs = unknown[cmd]
+            extra = "" if len(locs) <= 4 else f" (+{len(locs) - 4} lokasi)"
+            print(f"   - {cmd:<16} {', '.join(locs[:4])}{extra}")
+        print()
+
+    if not bad:
+        print("[OK] Tidak ada perintah opsional tanpa guard di jalur produksi.")
+        if unknown:
+            print("[CATATAN] Kategori D di atas bersifat informasi (sebagian besar")
+            print("          berasal dari text pesan/body awk, bukan perintah). ")
+        return 0
+    print(
+        "Tindakan: pastikan tiap perintah di (C)/(D) (a) ditambahkan ke BASE_PKGS/"
+        "bagian1, (b) diberi guard `command_exists`, atau (c) memang ada di semua "
+        "distro target (maka tambahkan ke daftar SAFE di tools ini)."
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

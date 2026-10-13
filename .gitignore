@@ -1,0 +1,26 @@
+# Konfigurasi lokal & kredensial — JANGAN pernah di-commit
+data.ini
+data.ini.*
+*.local.ini
+
+# Artefak runtime installer (dibuat di server, bukan di repo)
+install.log
+update.log
+update.log.1
+.backups/
+.update-staging/
+.update.lock/
+.bootstrap-staging/
+.ssh-backups/
+tmp/
+*.pid
+OoklaServer
+OoklaServer.properties
+OoklaServer.properties.default
+speedtestctl.sh
+cron-speedtest*.sh
+
+# Sampah editor/OS
+*.swp
+*~
+.DS_Store

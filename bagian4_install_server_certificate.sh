@@ -22,11 +22,24 @@ if [ -z "${BASE_DIR:-}" ]; then
     resolve_config_path "${1:-}"; init_paths; detect_os; load_and_validate_config
 fi
 
+# Nilai dari data.ini (load_and_validate_config). Default aman bila kosong.
+Domain="${Domain:-}"
+ApakahPakaiCloudflare="${ApakahPakaiCloudflare:-Tidak}"
+ApakahDomainWildcard="${ApakahDomainWildcard:-Tidak}"
+
 log_info "== Bagian 4: Penerbitan Sertifikat =="
+
+# certbot dipasang oleh bagian3. Bila gagal/tidak ada, hentikan dengan pesan
+# yang jelas (OoklaServer butuh sertifikat untuk endpoint HTTPS).
+if ! command_exists certbot; then
+    die "certbot tidak tersedia. Jalankan ulang: bash $BASE_DIR/bagian3_install_certbot.sh lalu ulangi instalasi."
+fi
 
 CF_CRED="/etc/letsencrypt/dnscloudflare.ini"
 # Email admin: pakai EmailCloudFlare bila ada, jika tidak pakai administrator@Domain.
 ADMIN_EMAIL="${EmailCloudFlare:-}"
+# Domain dibaca dari data.ini saat runtime (load_and_validate_config)
+# shellcheck disable=SC2154
 [ -n "$ADMIN_EMAIL" ] || ADMIN_EMAIL="administrator@${Domain}"
 FULLCHAIN="/etc/letsencrypt/live/$Domain/fullchain.pem"
 
@@ -140,5 +153,78 @@ if [ -f "$FULLCHAIN" ]; then
 else
     die "Sertifikat gagal dibuat / file $FULLCHAIN tidak ditemukan."
 fi
+
+# ── Pemeliharaan sertifikat otomatis ─────────────────────────────────────────
+# Mode Cloudflare (plugin DNS-01) bisa di-renew tanpa interaksi → dijadwalkan.
+# Mode manual DNS tidak bisa non-interaktif → dipasang pemantau masa berlaku
+# yang menulis peringatan ke update.log sebelum sertifikat kedaluwarsa.
+schedule_cert_maintenance() {
+    if [ "${ApakahPakaiCloudflare:-Tidak}" = "Ya" ]; then
+        cat > "$BASE_DIR/certbot-renew.sh" <<'RENEOF'
+#!/usr/bin/env bash
+# certbot-renew.sh — dibuat otomatis oleh bagian4_install_server_certificate.sh
+# Renewal non-interaktif (Cloudflare DNS plugin). certbot hanya memperbarui bila
+# sertifikat memang mendekati kedaluwarsa; OoklaServer di-restart lewat
+# --deploy-hook HANYA bila sertifikat benar-benar diperbarui.
+BASE_DIR="__BASE_DIR__"
+LOG="$BASE_DIR/update.log"
+{
+    printf '%s [INFO] certbot renew (otomatis) dimulai.\n' "$(date '+%F %T')"
+    rc=0
+    if command -v flock >/dev/null 2>&1; then
+        flock -n /run/speedtest-certbot-renew.lock \
+            certbot renew --non-interactive --quiet \
+            --deploy-hook "cd $BASE_DIR && ./ooklaserver.sh restart" || rc=$?
+    else
+        certbot renew --non-interactive --quiet \
+            --deploy-hook "cd $BASE_DIR && ./ooklaserver.sh restart" || rc=$?
+    fi
+    printf '%s [INFO] certbot renew selesai (rc=%s).\n' "$(date '+%F %T')" "$rc"
+} >> "$LOG" 2>&1
+exit 0
+RENEOF
+        sed -i "s|__BASE_DIR__|$BASE_DIR|" "$BASE_DIR/certbot-renew.sh"
+        chmod a+x "$BASE_DIR/certbot-renew.sh"
+        if cron_apply "# speedtest-cert-renew (managed)" \
+             "23 4 * * * bash $BASE_DIR/certbot-renew.sh >/dev/null 2>&1"; then
+            log_ok "Renewal sertifikat otomatis dijadwalkan (harian 04:23, mode Cloudflare)."
+        else
+            log_warn "Gagal menjadwalkan renewal sertifikat (crontab?)."
+        fi
+    else
+        cat > "$BASE_DIR/cert-check.sh" <<'CHKEOF'
+#!/usr/bin/env bash
+# cert-check.sh — dibuat otomatis oleh bagian4_install_server_certificate.sh
+# Pemantau masa berlaku sertifikat untuk mode DNS manual (renewal butuh
+# verifikasi DNS oleh manusia, jadi tidak bisa diotomatiskan sepenuhnya).
+DOMAIN="__DOMAIN__"
+FULLCHAIN="__FULLCHAIN__"
+BASE_DIR="__BASE_DIR__"
+LOG="$BASE_DIR/update.log"
+[ -f "$FULLCHAIN" ] || exit 0
+command -v openssl >/dev/null 2>&1 || exit 0
+end="$(openssl x509 -enddate -noout -in "$FULLCHAIN" 2>/dev/null | cut -d= -f2)"
+[ -n "$end" ] || exit 0
+end_epoch="$(date -d "$end" +%s 2>/dev/null || date -j -f "%b %e %T %Y %Z" "$end" +%s 2>/dev/null)"
+[ -n "$end_epoch" ] || exit 0
+days=$(( (end_epoch - $(date +%s)) / 86400 ))
+if [ "$days" -lt 21 ]; then
+    printf '%s [WARN] Sertifikat %s kedaluwarsa dalam %s hari — perbarui dengan menjalankan: bash %s/bagian4_install_server_certificate.sh (perlu verifikasi DNS manual).\n' \
+        "$(date '+%F %T')" "$DOMAIN" "$days" "$BASE_DIR" >> "$LOG"
+    logger -t speedtest-cert "Sertifikat $DOMAIN tersisa $days hari" 2>/dev/null || true
+fi
+exit 0
+CHKEOF
+        sed -i "s|__DOMAIN__|$Domain|; s|__FULLCHAIN__|$FULLCHAIN|; s|__BASE_DIR__|$BASE_DIR|" "$BASE_DIR/cert-check.sh"
+        chmod a+x "$BASE_DIR/cert-check.sh"
+        if cron_apply "# speedtest-cert-check (managed)" \
+             "41 4 * * * bash $BASE_DIR/cert-check.sh >/dev/null 2>&1"; then
+            log_ok "Pemantau masa berlaku sertifikat aktif (harian 04:41, mode DNS manual)."
+        else
+            log_warn "Gagal menjadwalkan pemantau sertifikat (crontab?)."
+        fi
+    fi
+}
+schedule_cert_maintenance
 
 log_ok "Bagian 4 selesai."

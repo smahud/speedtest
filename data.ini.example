@@ -1,11 +1,17 @@
 # WAJIB DI BACA DENGAN SEKSAMA
 # Data awal, isi data dulu bro
 #
+# CATATAN PENTING (v8):
+#   Konfigurasi ZeroTier, /etc/hosts, akses SSH, dan self-update TIDAK LAGI
+#   diatur di file ini — semuanya di-hardcode di repo: speedtest-repo.conf
+#   (lihat file tersebut bila ingin mengubah Network ID / Moon / jadwal update).
+#   ZeroTier sekarang MANDATORY untuk semua server yang menginstal dari repo ini.
+#
 # Jika menggunakan domain wildcard, cukup isi dengan domain utama saja di kolom Domain
-# Contoh example.com
+# Contoh: example.com
 #
 # Jika bukan wildcard, isi nama domain atau subdomain secara lengkap di kolom Domain
-# Contoh speedtest.example.com
+# Contoh: speedtest.example.com
 #
 # Wildcard CloudFlare wajib ambil yang API Global / API Token dengan akses Edit DNS
 # Wildcard selain CloudFlare harus update manual DNS, perhatikan perintah yang diberikan
@@ -13,21 +19,29 @@
 #
 # Pilih Ya atau Tidak
 
+# Domain yang dipakai untuk penerbitan sertifikat Let's Encrypt.
+#   - wildcard    → domain utama saja (example.com)
+#   - non-wildcard→ FQDN lengkap (speedtest.example.com)
 ApakahDomainWildcard="Ya"
 ApakahPakaiCloudflare="Ya"
 Domain="example.com"
-APICloudFlare="ISI_TOKEN_CLOUDFLARE_DI_SINI"
-RegisteredSpeedtestURL="speedtest.example.com"
 
-# (Opsional) Email akun Cloudflare (untuk API Global Key). Boleh dikosongkan
-# jika memakai API Token modern.
+# Token API Cloudflare (akses Edit DNS). Disarankan API Token scoped,
+# bukan Global API Key. Boleh dikosongkan bila ApakahPakaiCloudflare="Tidak".
+APICloudFlare="ISI_TOKEN_CLOUDFLARE_DI_SINI"
+
+# Email akun Cloudflare — HANYA diperlukan bila memakai Global API Key.
+# Kosongkan bila memakai API Token modern.
 EmailCloudFlare=""
 
-# (Opsional) Aktifkan modul ZeroTier Exit Node. Default: Ya.
-# Set "Tidak" untuk melewati instalasi ZeroTier (bagian7).
-AktifkanZeroTier="Ya"
+# Hostname/FQDN server speedtest ini (didaftarkan di serverlist speedtest).
+# Script juga akan menambahkan entri ke /etc/hosts: 127.0.0.1 <nilai ini>
+# (dikelola otomatis, lihat HOSTS_MANAGED di speedtest-repo.conf).
+# Boleh diisi hostname polos atau URL lengkap.
+RegisteredSpeedtestURL="speedtest.example.com"
 
-# Konfigurasi ZeroTier (Hanya jika AktifkanZeroTier="Ya")
-ZeroTierNetworkID="72ff30f9733a82d9"
-ZeroTierMoonID="72ff30f973"
-ZeroTierMoonConfigURL="https://moon.zerotier.my.id/moon.json"
+# ── TIDAK LAGI DIPAKAI (di-hardcode di speedtest-repo.conf) ──────────────────
+# AktifkanZeroTier   → ZeroTier sekarang WAJIB (selalu aktif)
+# ZeroTierNetworkID  → ZT_NETWORK_ID
+# ZeroTierMoonID     → ZT_MOON_ID
+# ZeroTierMoonConfigURL → ZT_MOON_CONFIG_URL

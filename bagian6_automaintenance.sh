@@ -40,41 +40,60 @@ fi
 
 # --- Buat wrapper script untuk cron agar lebih portabel ---
 CRON_WRAPPER="$BASE_DIR/cron-speedtest.sh"
-cat > "$CRON_WRAPPER" <<CRONEOF
+CRON_WRAPPER2="$BASE_DIR/cron-speedtest5.sh"
+REPORT_HOURLY_ENABLED="${REPORT_HOURLY_ENABLED:-Ya}"
+REPORT_FAST_ENABLED="${REPORT_FAST_ENABLED:-Ya}"
+REPORT_FAST_SCHEDULE="${REPORT_FAST_SCHEDULE:-*/5 * * * *}"
+
+entries=()
+
+# --- Laporan tiap jam ---
+if [ "$REPORT_HOURLY_ENABLED" = "Ya" ]; then
+  cat > "$CRON_WRAPPER" <<CRONEOF
 #!/bin/sh
-# Wrapper script untuk cron speedtest reporting
-# Dikelola oleh bagian6_automaintenance.sh
+# Wrapper script untuk cron speedtest reporting (dikelola bagian6_automaintenance.sh)
 sleep ${JITTER_MIN}m
 speedtest -o "$REGISTERED_URL"
 CRONEOF
-chmod +x "$CRON_WRAPPER"
+  chmod +x "$CRON_WRAPPER"
+  entries+=("0 * * * * $CRON_WRAPPER")
+else
+  log_info "REPORT_HOURLY_ENABLED=Tidak → laporan per jam dilewati."
+fi
 
-CRON_WRAPPER2="$BASE_DIR/cron-speedtest5.sh"
-cat > "$CRON_WRAPPER2" <<CRONEOF
+# --- Laporan cepat (default tiap 5 menit) ---
+# Dibatasi CPU lewat systemd-run bila tersedia supaya tidak mengganggu
+# OoklaServer di server kecil.
+if [ "$REPORT_FAST_ENABLED" = "Ya" ]; then
+  cat > "$CRON_WRAPPER2" <<CRONEOF
 #!/bin/sh
-# Wrapper script untuk cron speedtest reporting (setiap 5 menit)
-# Dikelola oleh bagian6_automaintenance.sh
+# Wrapper script untuk cron speedtest reporting cepat (dikelola bagian6_automaintenance.sh)
 if command -v systemd-run >/dev/null 2>&1; then
   systemd-run --scope -p CPUQuota=10% speedtest -o "$REGISTERED_URL"
 else
   speedtest -o "$REGISTERED_URL"
 fi
 CRONEOF
-chmod +x "$CRON_WRAPPER2"
+  chmod +x "$CRON_WRAPPER2"
+  entries+=("$REPORT_FAST_SCHEDULE $CRON_WRAPPER2")
+else
+  log_info "REPORT_FAST_ENABLED=Tidak → laporan cepat ($REPORT_FAST_SCHEDULE) dilewati/dihapus."
+fi
 
-CRON1="0 * * * * $CRON_WRAPPER"
-CRON2="*/5 * * * * $CRON_WRAPPER2"
+# Idempotensi ditangani cron_apply() (common_functions1.sh). Path kedua wrapper
+# selalu di-purge agar jadwal yang dimatikan benar-benar hilang dari crontab.
+if [ "${#entries[@]}" -gt 0 ]; then
+  if cron_apply "$CRON_TAG" --purge "$CRON_WRAPPER" --purge "$CRON_WRAPPER2" --purge "speedtest -o " "${entries[@]}"; then
+    log_ok "Cron reporting diperbarui (idempotent, tanpa duplikasi): $REGISTERED_URL"
+  else
+    log_warn "Gagal memasang cron reporting."
+  fi
+else
+  if cron_apply "$CRON_TAG" --purge "$CRON_WRAPPER" --purge "$CRON_WRAPPER2" --purge "speedtest -o "; then
+    log_ok "Reporting dinonaktifkan: seluruh entri laporan dibersihkan dari crontab."
+  else
+    log_warn "Gagal membersihkan entri cron reporting."
+  fi
+fi
 
-tmp_cron="$TMP_DIR/crontab.report.tmp"
-# Buang baris speedtest report lama + tag lama, lalu tambahkan yang baru.
-crontab -l 2>/dev/null | grep -v 'speedtest -o ' | grep -vF "$CRON_TAG" > "$tmp_cron" || true
-{
-  echo "$CRON_TAG"
-  echo "$CRON1"
-  echo "$CRON2"
-} >> "$tmp_cron"
-crontab "$tmp_cron" 2>/dev/null || log_warn "Gagal memasang cron reporting."
-rm -f "$tmp_cron"
-
-log_ok "Cron reporting diperbarui untuk URL: $REGISTERED_URL"
 log_ok "Bagian 6 selesai."

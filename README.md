@@ -11,6 +11,42 @@ maintenance, dan modul opsional ZeroTier Exit Node.
 
 ---
 
+## 0. Cara Cepat (v8.1.0 — SATU perintah)
+
+Cukup siapkan **satu file**: `data.ini` di direktori kerja (mis. `/root`),
+lalu jalankan satu perintah. Semua dependensi, modul, cron, hosts, dan akses
+SSH dipasang otomatis — tidak ada langkah manual lain:
+
+```bash
+# 1) isi data.ini (domain + kredensial sertifikat saja)
+nano data.ini
+
+# 2) satu perintah install (semua otomatis)
+curl -fsSL https://raw.githubusercontent.com/smahud/speedtest/main/install.sh | bash
+```
+
+Yang otomatis dikerjakan perintah di atas:
+
+| Aspek | Otomatis | Keterangan |
+|---|---|---|
+| Dependency dasar | ✅ | bash, curl, wget, tar, jq, ca-certificates, cron, iptables, procps, openssl |
+| Layanan cron | ✅ | `enable --now` daemon cron (cron/crond/cronie) supaya jadwal benar-benar jalan |
+| ZeroTier | ✅ **WAJIB** | Network ID/Moon ada di `speedtest-repo.conf`; gagal bila node belum di-authorize |
+| `/etc/hosts` | ✅ | `RegisteredSpeedtestURL` → localhost (blok `# speedtest-managed`) |
+| Akses SSH | ✅ | Kunci dari `github.com/smahud.keys` + drop-in sshd (diuji `sshd -t`, rollback bila gagal) |
+| Self-update | ✅ | Cron harian menarik repo, verifikasi SHA-256, backup, dan re-exec installer bila perlu |
+| Sertifikat | ✅ / manual | Cloudflare = otomatis + renewal terjadwal; DNS manual = interaktif sekali + pemantau masa berlaku |
+| Verifikasi akhir | ✅ | Laporan [OK]/[WARN] untuk OoklaServer, hosts, kunci SSH, cron, daemon cron, ZeroTier |
+
+Catatan:
+- `data.ini` **tidak lagi** memuat pengaturan ZeroTier (dihapus sejak v8);
+  semua nilai operasional ada di `speedtest-repo.conf`.
+- Ingin repo/URL lain? Set `REPO_RAW_BASE` sebelum menjalankan installer.
+- Dokumentasi lengkap perubahan + hasil uji: `LAPORAN_IMPLEMENTASI_v8.md`
+  dan `CHANGELOG.md`.
+
+---
+
 ## 1. Cara Kerja Path (PENTING)
 
 - **`CONFIG_PATH`** ditentukan dengan prioritas:

@@ -82,14 +82,16 @@ fi
 
 # ── HELPERS ──────────────────────────────────────────────────────────────
 safe_rm() {
-  local target="$1" desc="${2:-$target}"
+  local target="$1"
+  local desc="${2:-$1}"
   if [ -e "$target" ] || [ -L "$target" ]; then
     rm -rf "$target" 2>/dev/null && log_ok "Dihapus: $desc" || log_warn "Gagal hapus: $target"
   fi
 }
 
 safe_rm_file() {
-  local target="$1" desc="${2:-$target}"
+  local target="$1"
+  local desc="${2:-$1}"
   if [ -f "$target" ] || [ -L "$target" ]; then
     rm -f "$target" 2>/dev/null && log_ok "Dihapus: $desc" || log_warn "Gagal hapus: $target"
   fi
@@ -122,12 +124,16 @@ echo "    • Sertifikat Let's Encrypt"
 echo "    • Kredensial Cloudflare"
 echo "    • ZeroTier binary & service (identity DISIMPAN)"
 echo "    • Speedtest CLI"
-echo "    • Semua file di BASE_DIR (kecuali data.ini)"
-echo "    • Cron jobs, iptables NAT, IP forwarding"
+echo "    • File installer di BASE_DIR    (data.ini DISIMPAN)"
+echo "    • Cron job MILIK INSTALLER INI saja (tag/path spesifik)"
+echo "    • Rule iptables NAT spesifik ZeroTier + entri /etc/hosts terkelola"
+echo "    • Konfigurasi SSH terkelola (kunci GitHub & drop-in sshd)"
 echo ""
 echo "  Yang DISISAKAN:"
 echo "    • data.ini                      (konfigurasi)"
 echo "    • /var/lib/zerotier-one         (Node ID ZeroTier)"
+echo "    • Rule NAT milik layanan lain (Docker/libvirt/K8s TIDAK disentuh)"
+echo "    • IP forwarding sistem (tidak dimatikan paksa)"
 echo "============================================================"
 echo ""
 
@@ -189,7 +195,9 @@ if command -v rc-service >/dev/null 2>&1; then
   for svc in ooklaserver zerotier-one; do
     if [ -f "/etc/init.d/$svc" ]; then
       rc-service "$svc" stop 2>/dev/null || true
-      rc-update del "$svc" default 2>/dev/null || true
+      if command -v rc-update >/dev/null 2>&1; then
+        rc-update del "$svc" default 2>/dev/null || true
+      fi
       safe_rm_file "/etc/init.d/$svc" "OpenRC init: $svc"
       log_ok "OpenRC service $svc dihapus."
     fi
@@ -203,21 +211,48 @@ log_step "Step 3: Membersihkan semua cron jobs"
 
 if command -v crontab >/dev/null 2>&1; then
   TMP_CRON="$(mktemp)"
-  crontab -l 2>/dev/null | \
-    grep -v 'speedtest -o ' | \
-    grep -v 'speedtest-report' | \
-    grep -v 'ookla-daily-restart' | \
-    grep -v 'OoklaServer' | \
-    grep -v 'ooklaserver' | \
-    grep -v 'zt-moon-updater' | \
-    grep -v 'cron-speedtest' | \
-    grep -v 'speedtestctl' | \
-    grep -v '# speedtest-report (managed)' | \
-    grep -v '@reboot.*ooklaserver' \
+  # HANYA buang baris yang jelas milik installer ini:
+  #   - tag penanda unik di repo ini
+  #   - pemanggilan script dengan path di BASE_DIR
+  #   - wrapper cron yang kita buat di BASE_DIR
+  # Sengaja TIDAK memakai pola lebar seperti 'OoklaServer'/'ooklaserver' karena
+  # bisa menghapus cron job lain milik pengguna.
+  # CATATAN: redirect harus berada DI BARIS TERAKHIR pipeline. Bila ditaruh
+  # sebagai baris sendiri setelah tanda '|', shell memperlakukannya sebagai
+  # perintah kosong → file hasil menjadi KOSONG → crontab pengguna terhapus!
+  crontab -l 2>/dev/null \
+    | grep -vF '# speedtest-report (managed)' \
+    | grep -vF '# ookla-daily-restart' \
+    | grep -vF '# speedtest-autoupdate (managed)' \
+    | grep -vF '# speedtest-boot-sync (managed)' \
+    | grep -vF '# speedtest-zt-nat-restore (managed)' \
+    | grep -vF '# speedtest-cert-renew (managed)' \
+    | grep -vF '# speedtest-cert-check (managed)' \
+    | grep -vF '# zt-moon-updater (managed)' \
+    | grep -vF "$BASE_DIR/cron-speedtest.sh" \
+    | grep -vF "$BASE_DIR/cron-speedtest5.sh" \
+    | grep -vF "$BASE_DIR/ooklaserver.sh" \
+    | grep -vF "$BASE_DIR/speedtest-selfupdate.sh" \
+    | grep -vF "$BASE_DIR/bagian10_hosts_ssh.sh" \
+    | grep -vF "$BASE_DIR/bagian7_network.sh" \
+    | grep -vF "$BASE_DIR/speedtestctl.sh" \
+    | grep -vF "$BASE_DIR/certbot-renew.sh" \
+    | grep -vF "$BASE_DIR/cert-check.sh" \
+    | grep -vF "/usr/local/bin/zt-moon-updater.sh" \
     > "$TMP_CRON" 2>/dev/null || true
+
+  # Pengaman: bila crontab asli BERISI tetapi hasil filter KOSONG, beri tahu
+  # jelas (indikasi filter bermasalah atau memang semua isinya milik installer).
+  CRON_BEFORE_COUNT="$(crontab -l 2>/dev/null | grep -c '[^[:space:]]' || true)"
+  CRON_AFTER_COUNT="$(grep -c '[^[:space:]]' "$TMP_CRON" 2>/dev/null || true)"
+  if [ "${CRON_BEFORE_COUNT:-0}" -gt 0 ] && [ "${CRON_AFTER_COUNT:-0}" -eq 0 ]; then
+    log_warn "Seluruh isi crontab termasuk milik installer ini (atau filter tidak menemukan sisa)."
+    log_warn "Crontab akan menjadi kosong — backup disimpan di ${TMP_CRON}.bak"
+    cp -f "$TMP_CRON" "${TMP_CRON}.bak" 2>/dev/null || true
+  fi
   crontab "$TMP_CRON" 2>/dev/null || true
   rm -f "$TMP_CRON"
-  log_ok "Cron jobs dibersihkan."
+  log_ok "Cron jobs (milik installer ini) dibersihkan."
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -301,46 +336,209 @@ fi
 log_step "Step 7: Membersihkan IP forwarding & iptables NAT"
 
 safe_rm_file "/etc/sysctl.d/99-ipforward.conf" "IP forwarding config"
-sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1 || true
 
+# PENTING: dulu script ini menjalankan `iptables -t nat -F POSTROUTING`,
+# `iptables -F FORWARD`, dan `sysctl -w net.ipv4.ip_forward=0` — ketiganya
+# GLOBAL dan bisa merusak jaringan Docker/libvirt/K8s/router di host yang sama.
+# Sekarang hanya rule milik kita (spesifik interface) yang dihapus.
 if command -v iptables >/dev/null 2>&1; then
-  log_info "Membersihkan iptables NAT rules..."
-  iptables -t nat -F POSTROUTING 2>/dev/null || true
-  iptables -F FORWARD 2>/dev/null || true
-  log_ok "iptables NAT rules dibersihkan."
+  log_info "Menghapus rule NAT spesifik ZeroTier (bila ada)..."
+  ZT_IF="$(ip -o link show 2>/dev/null | grep -o 'zt[a-z0-9]*' | head -n 1)"
+  PUB_IF="$(ip route 2>/dev/null | grep default | awk '{print $5}' | head -n 1)"
+  if [ -n "$ZT_IF" ] && [ -n "$PUB_IF" ]; then
+    while iptables -t nat -C POSTROUTING -o "$PUB_IF" -j MASQUERADE 2>/dev/null; do
+      iptables -t nat -D POSTROUTING -o "$PUB_IF" -j MASQUERADE 2>/dev/null || break
+    done
+    while iptables -C FORWARD -i "$ZT_IF" -o "$PUB_IF" -j ACCEPT 2>/dev/null; do
+      iptables -D FORWARD -i "$ZT_IF" -o "$PUB_IF" -j ACCEPT 2>/dev/null || break
+    done
+    while iptables -C FORWARD -i "$PUB_IF" -o "$ZT_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do
+      iptables -D FORWARD -i "$PUB_IF" -o "$ZT_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || break
+    done
+    log_ok "Rule NAT ZeroTier dibersihkan (rule lain tidak disentuh)."
+  else
+    log_warn "Interface ZeroTier tidak ditemukan — rule NAT dibiarkan (hapus manual bila perlu)."
+  fi
+  log_info "Sisa rule FORWARD/POSTROUTING milik layanan lain TIDAK diubah."
+else
+  log_info "iptables tidak tersedia — dilewati."
 fi
+
+# IP forwarding TIDAK dimatikan paksa: host mungkin memakainya untuk Docker/VM/VPN.
+log_info "IP forwarding dibiarkan aktif bila dimatikan bisa mengganggu layanan lain."
+log_info "Jika ingin mematikan: sysctl -w net.ipv4.ip_forward=0 (setelah cek layanan lain)."
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP 8: CLEAN BASE_DIR (keep ONLY data.ini)
 # ═══════════════════════════════════════════════════════════════════════════
+log_step "Step 7b: Mengembalikan /etc/hosts & konfigurasi SSH yang dikelola"
+
+# Nilai default (sama dengan speedtest-repo.conf)
+UF_HOSTS_FILE="/etc/hosts"
+UF_HOSTS_MARKER="speedtest-managed"
+UF_SSH_MARKER="speedtest-managed-keys"
+UF_SSH_USERS="root"
+
+# Parser nilai: buang komentar inline (# didahului spasi), trim spasi, lepas kutip.
+uf_parse_value() {
+  local v="$1"
+  v="$(printf '%s' "$v" | sed 's/[[:blank:]]\+#.*$//')"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  v="${v%\"}"; v="${v#\"}"
+  printf '%s' "$v"
+}
+
+# Baca konfigurasi repo (file ada sebelum Step 8 menghapusnya)
+REPO_CONF="$BASE_DIR/speedtest-repo.conf"
+if [ -f "$REPO_CONF" ]; then
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue ;; esac
+    key="${line%%=*}"
+    case "$key" in *[!A-Za-z0-9_]*) continue ;; esac
+    val="$(uf_parse_value "${line#*=}")"
+    case "$key" in
+      HOSTS_FILE) UF_HOSTS_FILE="$val" ;;
+      HOSTS_MARKER) UF_HOSTS_MARKER="$val" ;;
+      SSH_MARKER) UF_SSH_MARKER="$val" ;;
+      SSH_TARGET_USERS) UF_SSH_USERS="$val" ;;
+    esac
+  done < "$REPO_CONF"
+fi
+
+# ── /etc/hosts ──
+if [ -f "$UF_HOSTS_FILE" ] && grep -qF "# $UF_HOSTS_MARKER" "$UF_HOSTS_FILE" 2>/dev/null; then
+  cp -p "$UF_HOSTS_FILE" "${UF_HOSTS_FILE}.uninstall.bak" 2>/dev/null || true
+  grep -vF "# $UF_HOSTS_MARKER" "$UF_HOSTS_FILE" > "${UF_HOSTS_FILE}.tmp.uninstall" 2>/dev/null || true
+  if [ -s "${UF_HOSTS_FILE}.tmp.uninstall" ]; then
+    # mv gagal bila file hosts adalah mount point → fallback tulis in-place.
+    if ! mv -f "${UF_HOSTS_FILE}.tmp.uninstall" "$UF_HOSTS_FILE" 2>/dev/null; then
+      cat "${UF_HOSTS_FILE}.tmp.uninstall" > "$UF_HOSTS_FILE" 2>/dev/null || true
+      rm -f "${UF_HOSTS_FILE}.tmp.uninstall" 2>/dev/null || true
+    fi
+    log_ok "Entri $UF_HOSTS_MARKER dihapus dari $UF_HOSTS_FILE (backup: ${UF_HOSTS_FILE}.uninstall.bak)"
+  else
+    rm -f "${UF_HOSTS_FILE}.tmp.uninstall"
+    log_warn "Tidak menghapus entri hosts untuk keamanan (hasil kosong)."
+  fi
+else
+  log_info "Tidak ada entri hosts yang dikelola ($UF_HOSTS_FILE)."
+fi
+
+# ── Kunci SSH yang dikelola (blok penanda) ──
+for u in $UF_SSH_USERS root; do
+  # Portabel: getent tidak selalu ada (mis. Alpine minimal) → fallback /etc/passwd.
+  home_dir=""
+  command -v getent >/dev/null 2>&1 && home_dir="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)"
+  [ -n "$home_dir" ] || home_dir="$(awk -F: -v u="$u" '$1 == u { print $6; exit }' /etc/passwd 2>/dev/null)"
+  [ -n "$home_dir" ] || { [ "$u" = "root" ] && home_dir="/root"; }
+  [ -n "$home_dir" ] || continue
+  ak="$home_dir/.ssh/authorized_keys"
+  [ -f "$ak" ] || continue
+  grep -qF "# BEGIN $UF_SSH_MARKER" "$ak" 2>/dev/null || continue
+  if confirm "Hapus kunci publik yang dikelola installer dari $ak (user '$u')?"; then
+    tmp_ak="${ak}.uninstall.tmp"
+    if awk -v begin="# BEGIN $UF_SSH_MARKER" -v end="# END $UF_SSH_MARKER" '
+        $0 == begin { skip = 1; next }
+        $0 == end   { skip = 0; next }
+        !skip { print }
+      ' "$ak" > "$tmp_ak" 2>/dev/null; then
+      mv -f "$tmp_ak" "$ak"
+      chmod 600 "$ak" 2>/dev/null || true
+      log_ok "Blok kunci installer dihapus dari $ak."
+    else
+      rm -f "$tmp_ak"
+      log_warn "Gagal memproses $ak — dibiarkan apa adanya."
+    fi
+  fi
+done
+
+# ── Drop-in sshd ──
+SSHD_DROPIN="/etc/ssh/sshd_config.d/99-speedtest-managed.conf"
+if [ -f "$SSHD_DROPIN" ]; then
+  if confirm "Hapus konfigurasi sshd yang dikelola installer ($SSHD_DROPIN)?"; then
+    SSHD_BIN=""
+    if command -v sshd >/dev/null 2>&1; then SSHD_BIN="$(command -v sshd)"
+    elif [ -x /usr/sbin/sshd ]; then SSHD_BIN="/usr/sbin/sshd"; fi
+    cp -p "$SSHD_DROPIN" "/tmp/99-speedtest-managed.conf.bak" 2>/dev/null || true
+    rm -f "$SSHD_DROPIN"
+    if [ -n "$SSHD_BIN" ] && ! "$SSHD_BIN" -t >/dev/null 2>&1; then
+      cp -p "/tmp/99-speedtest-managed.conf.bak" "$SSHD_DROPIN" 2>/dev/null || true
+      log_warn "Konfigurasi sshd jadi tidak valid tanpa file ini — file dipulihkan."
+    else
+      if command -v systemctl >/dev/null 2>&1; then
+        systemctl reload sshd >/dev/null 2>&1 || systemctl reload ssh >/dev/null 2>&1 || true
+      elif command -v rc-service >/dev/null 2>&1; then
+        rc-service sshd reload >/dev/null 2>&1 || true
+      fi
+      log_ok "Drop-in sshd dihapus (backup: /tmp/99-speedtest-managed.conf.bak)."
+    fi
+  fi
+else
+  log_info "Tidak ada drop-in sshd yang dikelola."
+fi
+
 log_step "Step 8: Membersihkan BASE_DIR ($BASE_DIR)"
 
 DATA_INI_BACKUP="$(mktemp)"
 cp "$CONFIG_PATH" "$DATA_INI_BACKUP"
 
-# Semua .sh
-for f in "$BASE_DIR"/*.sh; do
-  [ -f "$f" ] && safe_rm_file "$f" "$(basename "$f")"
+# HANYA file yang benar-benar dikelola installer ini (dulu: SEMUA *.sh di
+# BASE_DIR dihapus — berbahaya bila BASE_DIR = /root atau /opt).
+MANAGED_FILES="
+install.sh
+common_functions1.sh
+auto_update_lib.sh
+speedtest-repo.conf
+speedtest-selfupdate.sh
+VERSION
+MANIFEST
+checksums.sha256
+bagian0.sh
+bagian1_install_dependency.sh
+bagian2_install_ooklaserver.sh
+bagian3_install_certbot.sh
+bagian4_install_server_certificate.sh
+bagian5_update_ooklaserver.sh
+bagian6_automaintenance.sh
+bagian7_network.sh
+bagian8_cek_konfigurasi.sh
+bagian9_ssh_access.sh
+bagian10_hosts_ssh.sh
+bagian11_self_update.sh
+uninstall.sh
+speedtestctl.sh
+certbot-renew.sh
+cert-check.sh
+ooklaserver.sh
+cron-speedtest.sh
+cron-speedtest5.sh
+OoklaServer
+OoklaServer.properties
+OoklaServer.properties.default
+OoklaServer.pid
+.speedtest-install.state
+install.log
+update.log
+update.log.1
+"
+for f in $MANAGED_FILES; do
+  safe_rm_file "$BASE_DIR/$f" "$f"
 done
 
-# OoklaServer binary, properties, pid, state, log
-safe_rm_file "$BASE_DIR/OoklaServer"                   "OoklaServer binary"
-safe_rm_file "$BASE_DIR/OoklaServer.properties"         "OoklaServer.properties"
-safe_rm_file "$BASE_DIR/OoklaServer.properties.default" "OoklaServer.properties.default"
-safe_rm_file "$BASE_DIR/OoklaServer.pid"                "OoklaServer.pid"
-safe_rm_file "$BASE_DIR/.speedtest-install.state"       "Install state file"
-safe_rm_file "$BASE_DIR/install.log"                    "Install log"
-
-# Cron wrapper
-safe_rm_file "$BASE_DIR/cron-speedtest.sh"   "cron wrapper"
-safe_rm_file "$BASE_DIR/cron-speedtest5.sh"  "cron wrapper"
-
-# Tmp directory
-safe_rm "$BASE_DIR/tmp" "tmp directory"
+# Direktori kerja installer
+safe_rm "$BASE_DIR/tmp"            "tmp directory"
+safe_rm "$BASE_DIR/.bootstrap-staging" "staging bootstrap"
+safe_rm "$BASE_DIR/.backups"       "backup versi lama"
+safe_rm "$BASE_DIR/.update-staging" "staging update"
+safe_rm "$BASE_DIR/.update.lock"   "lock update"
+safe_rm "$BASE_DIR/.ssh-backups"   "backup konfigurasi SSH"
 
 # Sisa archive
-for leftover in "$BASE_DIR"/*.tgz "$BASE_DIR"/*.tar.gz "$BASE_DIR"/OoklaServer-*; do
-  [ -f "$leftover" ] 2>/dev/null && safe_rm_file "$leftover" "$(basename "$leftover")"
+for leftover in "$BASE_DIR"/*.tgz "$BASE_DIR"/*.tar.gz "$BASE_DIR"/OoklaServer-* "$BASE_DIR"/*.tmp.* "$BASE_DIR"/.version-probe.* "$BASE_DIR"/.version-pin-probe.*; do
+  if [ -f "$leftover" ]; then
+    safe_rm_file "$leftover" "$(basename "$leftover")"
+  fi
 done
 
 # Restore data.ini
@@ -386,9 +584,10 @@ echo "    ✗ OoklaServer     (binary, service, cron, properties)"
 echo "    ✗ ZeroTier        (binary, service, scripts, moon)"
 echo "    ✗ Speedtest CLI   (binary, package)"
 echo "    ✗ SSL Certificates + Cloudflare credentials"
-echo "    ✗ IP forwarding + iptables NAT"
-echo "    ✗ Semua file di BASE_DIR"
-echo "    ✗ Semua cron jobs"
+echo "    ✗ Rule NAT ZeroTier + entri /etc/hosts terkelola"
+echo "    ✗ Konfigurasi SSH terkelola (kunci + drop-in sshd)"
+echo "    ✗ File installer di BASE_DIR"
+echo "    ✗ Cron job milik installer ini"
 echo ""
 echo "  ✓ Disisakan:"
 echo "    ✓ $CONFIG_PATH"

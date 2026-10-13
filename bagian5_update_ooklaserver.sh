@@ -14,6 +14,9 @@ if [ -z "${BASE_DIR:-}" ]; then
     resolve_config_path "${1:-}"; init_paths; detect_os; load_and_validate_config
 fi
 
+# Nilai dari data.ini (load_and_validate_config).
+Domain="${Domain:-}"
+
 log_info "== Bagian 5: Update OoklaServer & Sertifikat =="
 
 [ -f "$OOKLA_PROPERTIES" ] || die "OoklaServer.properties tidak ditemukan di $OOKLA_PROPERTIES"
