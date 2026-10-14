@@ -342,6 +342,11 @@ open_ports() {
         tcp_list="$tcp_list,$p"
         udp_list="${udp_list:+$udp_list,}$p"
     done
+    # nPerf Server (layanan kedua, TCP saja). Port dibaca dari kebijakan repo
+    # (NPERF_ENABLED / NPERF_HTTP_PORT / NPERF_TLS_PORT di speedtest-repo.conf).
+    if [ "${NPERF_ENABLED:-Ya}" = "Ya" ]; then
+        tcp_list="$tcp_list,${NPERF_HTTP_PORT:-8081},${NPERF_TLS_PORT:-8443}"
+    fi
 
     log_info "Konfigurasi Firewall (TCP: $tcp_list; UDP: ${udp_list:-$zt_ports})..."
     if command -v ufw >/dev/null 2>&1; then
@@ -350,12 +355,20 @@ open_ports() {
             ufw allow "$p"/tcp >/dev/null 2>&1 || true
             ufw allow "$p"/udp >/dev/null 2>&1 || true
         done
+        if [ "${NPERF_ENABLED:-Ya}" = "Ya" ]; then
+            ufw allow "${NPERF_HTTP_PORT:-8081}"/tcp >/dev/null 2>&1 || true
+            ufw allow "${NPERF_TLS_PORT:-8443}"/tcp >/dev/null 2>&1 || true
+        fi
     elif command -v firewall-cmd >/dev/null 2>&1; then
         firewall-cmd --permanent --add-port={80/tcp,443/tcp} >/dev/null 2>&1
         for p in $zt_ports; do
             firewall-cmd --permanent --add-port="$p"/tcp >/dev/null 2>&1 || true
             firewall-cmd --permanent --add-port="$p"/udp >/dev/null 2>&1 || true
         done
+        if [ "${NPERF_ENABLED:-Ya}" = "Ya" ]; then
+            firewall-cmd --permanent --add-port="${NPERF_HTTP_PORT:-8081}"/tcp >/dev/null 2>&1 || true
+            firewall-cmd --permanent --add-port="${NPERF_TLS_PORT:-8443}"/tcp >/dev/null 2>&1 || true
+        fi
         firewall-cmd --reload >/dev/null 2>&1
     else
         # iptables dipakai via path absolut: 'iptables' ada di /usr/sbin yang

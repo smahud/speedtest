@@ -23,6 +23,9 @@
 #   bash ./uninstall.sh                      # Auto-detect dari CWD
 #   bash ./uninstall.sh /path/ke/data.ini    # Path eksplisit
 #   bash ./uninstall.sh --force              # Skip semua konfirmasi
+#   bash ./uninstall.sh --purge              # Hapus juga PAKET nperf-server
+#                                            # (config + UUID) — default: paket
+#                                            # & identitas nPerf dipertahankan
 ###############################################################################
 set -euo pipefail
 
@@ -48,11 +51,13 @@ fi
 
 # ── ARGUMENTS ────────────────────────────────────────────────────────────
 FORCE=0
+PURGE=0
 CONFIG_ARG=""
 
 for arg in "$@"; do
   case "$arg" in
     --force|-f|--yes|-y) FORCE=1 ;;
+    --purge)             PURGE=1 ;;
     *) CONFIG_ARG="$arg" ;;
   esac
 done
@@ -239,6 +244,10 @@ if command -v crontab >/dev/null 2>&1; then
     | grep -vF '# speedtest-cert-renew (managed)' \
     | grep -vF '# speedtest-cert-check (managed)' \
     | grep -vF '# zt-moon-updater (managed)' \
+    | grep -vF '# nperf-server (managed)' \
+    | grep -vF '# nperf-ramdisk (managed)' \
+    | grep -vF '/etc/init.d/nperf-server start' \
+    | grep -vF '/var/www/html/nperf' \
     | grep -vF "$BASE_DIR/cron-speedtest.sh" \
     | grep -vF "$BASE_DIR/cron-speedtest5.sh" \
     | grep -vF "$BASE_DIR/ooklaserver.sh" \
@@ -597,6 +606,124 @@ else
   log_info "Tidak ada drop-in sshd yang dikelola."
 fi
 
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 7c: nPerf SERVER (layanan speedtest kedua, bila pernah dipasang)
+# ═══════════════════════════════════════════════════════════════════════════
+log_step "Step 7c: Membersihkan nPerf Server (bila ada)"
+
+NPERF_FOUND=0
+if command -v dpkg >/dev/null 2>&1 && dpkg -s nperf-server >/dev/null 2>&1; then NPERF_FOUND=1; fi
+if [ "$NPERF_FOUND" -eq 0 ] && command -v rpm >/dev/null 2>&1 && rpm -q nperf-server >/dev/null 2>&1; then NPERF_FOUND=1; fi
+if [ "$NPERF_FOUND" -eq 0 ]; then
+  if [ -x /usr/bin/nPerfServer ] || [ -f /etc/nperf/nperf-server.conf ] || [ -d "$BASE_DIR/nperf" ]; then
+    NPERF_FOUND=1
+  fi
+fi
+
+if [ "$NPERF_FOUND" -eq 0 ]; then
+  log_info "nPerf tidak terdeteksi — dilewati."
+else
+  # 1) Stop + disable service (systemd, lalu fallback init.d)
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now nperf-server >/dev/null 2>&1 || true
+    systemctl reset-failed nperf-server >/dev/null 2>&1 || true
+  fi
+  if [ -x /etc/init.d/nperf-server ]; then
+    /etc/init.d/nperf-server stop >/dev/null 2>&1 || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then pkill -x nPerfServer 2>/dev/null || true; fi
+  log_ok "Service nPerf dihentikan & dimatikan."
+
+  # 2) Rule nftables ber-comment "nPerfServer" (redirect 80/443 + anti-DOS).
+  #    PENTING: paket nPerf TIDAK menghapus rule anti-DOS saat service berhenti.
+  #    Penghapusan DIBATASI jumlahnya + diverifikasi tiap langkah, agar tidak
+  #    menggantung bila backend aneh (pelajaran bug C7 pada iptables).
+  NPERF_NFT_BIN="$(command -v nft 2>/dev/null || true)"
+  if [ -z "$NPERF_NFT_BIN" ] && [ -x /usr/sbin/nft ]; then NPERF_NFT_BIN="/usr/sbin/nft"; fi
+  if [ -n "$NPERF_NFT_BIN" ]; then
+    nft_del_nperf() {
+      local i=0 before after line fam tab chain h
+      before="$("$NPERF_NFT_BIN" list ruleset 2>/dev/null | grep -c 'comment "nPerfServer"' || true)"
+      case "${before:-}" in ''|*[!0-9]*) before=0 ;; esac
+      while [ "$i" -lt 20 ] && [ "$before" -gt 0 ]; do
+        line="$("$NPERF_NFT_BIN" -a list ruleset 2>/dev/null | awk '
+          /^table /{fam=$2; tab=$3; chain=""}
+          /^[[:space:]]*chain /{chain=$2}
+          /comment "nPerfServer"/ && /# handle /{print fam" "tab" "chain" "$NF; exit}
+        ' || true)"
+        [ -n "$line" ] || break
+        # shellcheck disable=SC2086  # empat kolom sengaja dipecah
+        set -- $line
+        fam="$1"; tab="$2"; chain="$3"; h="$4"
+        case "${h:-}" in ''|*[!0-9]*) break ;; esac
+        "$NPERF_NFT_BIN" delete rule "$fam" "$tab" "$chain" handle "$h" >/dev/null 2>&1 || break
+        i=$((i + 1))
+        after="$("$NPERF_NFT_BIN" list ruleset 2>/dev/null | grep -c 'comment "nPerfServer"' || true)"
+        case "${after:-}" in ''|*[!0-9]*) after=0 ;; esac
+        [ "$after" -lt "$before" ] || break   # tidak berkurang → berhenti (anti-hang)
+        before="$after"
+      done
+    }
+    nft_del_nperf
+    NPERF_NFT_LEFT="$("$NPERF_NFT_BIN" list ruleset 2>/dev/null | grep -c 'comment "nPerfServer"' || true)"
+    case "${NPERF_NFT_LEFT:-}" in ''|*[!0-9]*) NPERF_NFT_LEFT=0 ;; esac
+    if [ "$NPERF_NFT_LEFT" -eq 0 ]; then
+      log_ok "Rule nftables nPerfServer dibersihkan (redirect 80/443 + anti-DOS)."
+    else
+      log_warn "Masih ada ${NPERF_NFT_LEFT} rule ber-comment \"nPerfServer\" — periksa manual: nft list ruleset"
+    fi
+  else
+    log_info "nftables (nft) tidak ada — tidak ada rule nPerf yang perlu dibersihkan."
+  fi
+
+  # 3) Repo & kunci yang ditambahkan installer (agar sistem kembali bersih)
+  safe_rm_file "/etc/apt/sources.list.d/nperf.list" "Repo APT nPerf"
+  safe_rm_file "/etc/apt/keyrings/nperf.asc" "Kunci repo nPerf (apt keyring)"
+  safe_rm_file "/usr/share/keyrings/nperf-archive-keyring.gpg" "Kunci repo nPerf (keyring lama)"
+  safe_rm_file "/etc/yum.repos.d/nperf-server.repo" "Repo RPM nPerf"
+
+  # 4) Watchdog/bawaan paket & cron kita
+  safe_rm_file "/etc/cron.d/nperf-server" "Watchdog cron bawaan nPerf"
+  safe_rm_file "/etc/cron.d/nperf-ramdisk" "Cron ramdisk nPerf (bila dipakai)"
+
+  # 5) Ramdisk/berkas HTTP (hanya bila mode tmpfs pernah diaktifkan)
+  if command -v mountpoint >/dev/null 2>&1 && mountpoint -q /var/www/html/nperf 2>/dev/null; then
+    umount /var/www/html/nperf 2>/dev/null || log_warn "Gagal unmount /var/www/html/nperf (periksa manual)."
+    log_ok "Ramdisk /var/www/html/nperf dilepas."
+  fi
+  safe_rm "/var/www/html/nperf" "berkas HTTP nPerf (ramdisk/web)"
+  safe_rm "/home/nperf" "user home nPerf (bila dibuat installer)"
+
+  # 6) Artefak repo kita di BASE_DIR
+  safe_rm "$BASE_DIR/nperf" "artefak nPerf (log/backup/state)"
+
+  # 7) Paket & identitas: hanya bila --purge
+  if [ "$PURGE" -eq 1 ]; then
+    if confirm "Hapus PAKET nperf-server beserta config & UUID (identitas server)?"; then
+      if command -v apt-get >/dev/null 2>&1; then
+        apt-get purge -y nperf-server >/dev/null 2>&1 || true
+      elif command -v dnf >/dev/null 2>&1; then
+        dnf remove -y nperf-server >/dev/null 2>&1 || true
+      elif command -v yum >/dev/null 2>&1; then
+        yum remove -y nperf-server >/dev/null 2>&1 || true
+      elif command -v zypper >/dev/null 2>&1; then
+        zypper --non-interactive remove nperf-server >/dev/null 2>&1 || true
+      fi
+      safe_rm "/etc/nperf" "konfigurasi nPerf"
+      safe_rm "/var/lib/nperf-server" "identitas (UUID) & PID nPerf"
+      safe_rm_file "/etc/init.d/nperf-server" "init script nPerf"
+      safe_rm_file "/lib/systemd/system/nperf-server.service" "unit systemd nPerf"
+      safe_rm_file "/usr/bin/nPerfServer" "biner nPerfServer"
+      log_ok "Paket nperf-server & identitas dihapus (--purge)."
+    else
+      log_info "Penghapusan paket nPerf dibatalkan."
+    fi
+  else
+    log_info "Paket nperf-server DIPERTAHANKAN (UUID + sertifikat TLS nPerf tetap)."
+    log_info "  Hapus total bila diinginkan: bash $BASE_DIR/uninstall.sh --purge  (atau: apt-get purge -y nperf-server)"
+  fi
+fi
+
 log_step "Step 8: Membersihkan BASE_DIR ($BASE_DIR)"
 
 DATA_INI_BACKUP="$(mktemp)"
@@ -625,6 +752,7 @@ bagian8_cek_konfigurasi.sh
 bagian9_ssh_access.sh
 bagian10_hosts_ssh.sh
 bagian11_self_update.sh
+bagian12_nperf_server.sh
 uninstall.sh
 speedtestctl.sh
 certbot-renew.sh
@@ -648,6 +776,7 @@ for f in $MANAGED_FILES; do
 done
 
 # Direktori kerja installer
+safe_rm "$BASE_DIR/nperf"          "artefak nPerf (bila masih ada)"
 safe_rm "$BASE_DIR/tmp"            "tmp directory"
 safe_rm "$BASE_DIR/.bootstrap-staging" "staging bootstrap"
 safe_rm "$BASE_DIR/.backups"       "backup versi lama"

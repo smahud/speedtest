@@ -66,6 +66,7 @@ bagian8_cek_konfigurasi.sh
 bagian9_ssh_access.sh
 bagian10_hosts_ssh.sh
 bagian11_self_update.sh
+bagian12_nperf_server.sh
 install.sh
 ooklaserver.sh
 uninstall.sh
@@ -508,6 +509,11 @@ fi
 run_section "bagian10_hosts_ssh"
 run_section "bagian11_self_update"
 
+# Bagian12: nPerf Server (layanan speedtest kedua, port 8081/8443).
+# Dijalankan SEBELUM bagian7 agar paket pihak ketiga tidak tertahan bila
+# node ZeroTier belum di-authorize.
+run_section "bagian12_nperf_server"
+
 # Bagian7 dijalankan TERAKHIR: ZeroTier WAJIB (jaringan kontrol operator).
 # Bila node belum di-authorize, instalasi berhenti dengan pesan jelas — semua
 # komponen lain sudah terpasang dan akan dicoba ulang oleh self-update berkala.
@@ -515,7 +521,7 @@ run_section "bagian7_network"
 
 # Pastikan script cron executable.
 chmod a+x "$BASE_DIR/speedtest-selfupdate.sh" "$BASE_DIR/bagian10_hosts_ssh.sh" \
-          "$BASE_DIR/bagian7_network.sh" 2>/dev/null || true
+          "$BASE_DIR/bagian7_network.sh" "$BASE_DIR/bagian12_nperf_server.sh" 2>/dev/null || true
 
 # --- Restart final ---
 log_info "Melakukan restart final OoklaServer dari lokasi instalasi..."
@@ -647,6 +653,19 @@ verify_final() {
       log_warn "  TLS belum terverifikasi untuk '$Domain' — uji: openssl s_client -connect 127.0.0.1:443 -servername $Domain"
     fi
   fi
+
+  # 9) nPerf Server (layanan kedua) — hanya bila diaktifkan di repo conf.
+  if [ "${NPERF_ENABLED:-Ya}" = "Ya" ]; then
+    local np_http="${NPERF_HTTP_PORT:-8081}" np_out=""
+    if command_exists curl; then
+      np_out="$(curl -s -m 5 -i "http://127.0.0.1:${np_http}/" 2>/dev/null || true)"
+    fi
+    if printf '%s' "$np_out" | grep -q 'Server: nPerf'; then
+      log_ok "  nPerf Server aktif (127.0.0.1:${np_http}, TLS ${NPERF_TLS_PORT:-8443})."
+    elif [ -x "$BASE_DIR/bagian12_nperf_server.sh" ]; then
+      log_warn "  nPerf belum menjawab — cek: bash $BASE_DIR/bagian12_nperf_server.sh --status"
+    fi
+  fi
 }
 verify_final
 
@@ -665,4 +684,5 @@ log_info "  Status     : $(command -v zerotier-cli >/dev/null 2>&1 && zerotier-c
 log_info ""
 log_info "Perintah management (bisa dari mana saja):"
 log_info "  $BASE_DIR/speedtestctl.sh status|start|stop|restart|logs|uninstall"
+log_info "  $BASE_DIR/speedtestctl.sh nperf-status|nperf-restart   (nPerf Server)"
 print_hash 50

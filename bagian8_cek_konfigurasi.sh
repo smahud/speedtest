@@ -61,6 +61,9 @@ usage() {
   echo "  report      - Jalankan 1x laporan speedtest sekarang (tanpa tunggu cron)"
   echo "  logs        - Tampilkan log instalasi"
   echo "  report-log  - Tampilkan 50 baris terakhir log laporan"
+  echo "  nperf-status  - Status nPerf Server (layanan speedtest kedua)"
+  echo "  nperf-restart - Restart service nPerf"
+  echo "  nperf-logs    - Tampilkan log instalasi nPerf"
   echo "  uninstall   - Hapus service OoklaServer"
 }
 
@@ -111,6 +114,29 @@ case "${1:-}" in
       exit 1
     fi
     ;;
+  nperf-status|nperf-restart|nperf-logs)
+    if [ ! -x "$BASE_DIR/bagian12_nperf_server.sh" ]; then
+      echo "Modul nPerf tidak ada ($BASE_DIR/bagian12_nperf_server.sh)."
+      exit 1
+    fi
+    case "$1" in
+      nperf-status)  "$BASE_DIR/bagian12_nperf_server.sh" --status ;;
+      nperf-restart)
+        if command -v systemctl >/dev/null 2>&1; then
+          systemctl restart nperf-server && echo "nPerf direstart."
+        else
+          /etc/init.d/nperf-server restart
+        fi
+        ;;
+      nperf-logs)
+        if [ -f "$BASE_DIR/nperf/install-nperf.log" ]; then
+          tail -50 "$BASE_DIR/nperf/install-nperf.log"
+        else
+          echo "Log nPerf belum ada: $BASE_DIR/nperf/install-nperf.log"
+        fi
+        ;;
+    esac
+    ;;
   uninstall)
     echo "Menghapus service OoklaServer..."
     ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" stop ) >/dev/null 2>&1 || true
@@ -139,7 +165,7 @@ CTLEOF
   sed -i "s|__REPORT_LOG__|$REPORT_LOG|" "$BASE_DIR/speedtestctl.sh"
   sed -i "s|__OOKLA_PROPERTIES__|$OOKLA_PROPERTIES|" "$BASE_DIR/speedtestctl.sh"
   chmod a+x "$BASE_DIR/speedtestctl.sh"
-  log_ok "Tool management siap: $BASE_DIR/speedtestctl.sh (start|stop|restart|status|report|logs|report-log)"
+  log_ok "Tool management siap: $BASE_DIR/speedtestctl.sh (start|stop|restart|status|report|logs|report-log|nperf-status|nperf-restart|nperf-logs)"
 }
 generate_ctl
 

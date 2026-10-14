@@ -230,6 +230,7 @@ au_support_files_default() {
     bagian5_update_ooklaserver.sh bagian6_automaintenance.sh \
     bagian7_network.sh bagian8_cek_konfigurasi.sh \
     bagian9_ssh_access.sh bagian10_hosts_ssh.sh bagian11_self_update.sh \
+    bagian12_nperf_server.sh \
     install.sh uninstall.sh ooklaserver.sh speedtest-selfupdate.sh
 }
 

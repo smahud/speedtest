@@ -1,6 +1,44 @@
-# Ringkasan Perubahan (Revisi Path-Aware)
+## v8.2.0 — nPerf Server (layanan speedtest kedua)
 
-## v8.1.1 — Perbaikan menyeluruh hasil audit ronde 2 (B13–B20 + C5–C7)
+Fitur baru: **nPerf Server** (`nperf-server` resmi dari `repository.nperf.com`)
+dipasang berdampingan dengan OoklaServer, lengkap sampai pembersihan.
+
+**Modul baru `bagian12_nperf_server.sh`**
+1. Paket resmi nPerf: repo APT (`signed-by`, khusus Debian 13/trixie memakai
+   `trusted=yes` sesuai instruksi nPerf) atau repo RPM (`rhel/<major>.repo`).
+   Alpine tidak didukung → dilewati berpesan.
+2. Config nPerf **idempotent** (`PORT`/`TLS_PORT`/`REDIRECT_PORT_80`/`REDIRECT_PORT_443`)
+   dengan backup ke `$BASE_DIR/nperf/backup/`; default **8081/8443** + redirect
+   80→8081 & 443→8443 aktif (config lain dibiarkan bawaan nPerf).
+3. Service: systemd `enable/start/restart`, fallback init.d + cron `@reboot`;
+   watchdog `/etc/cron.d/nperf-server` bawaan paket dihapus agar tidak bentrok.
+4. Verifikasi: HTTP `Server: nPerf` di 8081, TLS 8443, UUID, dan rule
+   `nftables` (redirect + anti-DOS) — semuanya non-fatal.
+5. Mode `--config-only` (dipakai self-update harian) dan `--status`
+   (dipakai `speedtestctl.sh nperf-status`).
+6. Kegagalan yang bersifat *deferrable* (repo/jaringan nPerf tidak terjangkau)
+   **tidak** menggagalkan instalasi Ookla — dicoba ulang otomatis tiap hari.
+
+**Integrasi**
+- `install.sh`: bagian12 dijalankan **sebelum** bagian7 (gerbang ZeroTier tetap
+  terakhir), masuk `SUPPORT_FILES` + `chmod`, dan `verify_final` menambah
+  pemeriksaan nPerf.
+- `speedtest-repo.conf`: blok kebijakan `NPERF_*`.
+- `common_functions1.sh`: port 8081/8443 dibuka di firewall (`open_ports`).
+- `bagian8`: aksi baru `nperf-status`, `nperf-restart`, `nperf-logs` di
+  `speedtestctl.sh`.
+- `speedtest-selfupdate.sh`: menegakkan konfigurasi nPerf tiap self-update.
+- `auto_update_lib.sh` + `tools/regen-checksums.sh` + MANIFEST: berkas baru ikut
+  dipantau/checksum.
+- `uninstall.sh`: langkah **7c** membersihkan service, **semua** rule nftables
+  ber-comment `nPerfServer` (batas iterasi + verifikasi anti-menggantung), repo +
+  kunci, watchdog cron, dan artefak `$BASE_DIR/nperf`; opsi baru **`--purge`**
+  untuk menghapus paket + config + UUID (default: paket dipertahankan).
+- Uji E2E: seksi 20 baru (instalasi, idempotensi, `--config-only`, `--status`,
+  jalur offline, jalur systemd **dan** init.d, bookworm/trixie, uninstall &
+  `--purge`).
+
+## v8.1.1 — Perbaikan menyeluruh hasil audit ronde 2 (B13–B20 + C5–C7) — Perbaikan menyeluruh hasil audit ronde 2 (B13–B20 + C5–C7)
 Semua temuan `LAPORAN_ANALISA_RONDE2.md` dikerjakan **tanpa terkecuali**, ditambah
 temuan baru yang muncul saat uji ulang. Ringkas:
 

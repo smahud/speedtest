@@ -14,7 +14,9 @@
 # Cakupan: instalasi penuh, entri /etc/hosts, kunci SSH + sshd, cron
 #          (self-update/boot-sync/NAT/report/restart), self-update otomatis
 #          (VERSION naik + backup + checksum), idempotensi, dan sifat WAJIB
-#          ZeroTier (gagal bila belum di-authorize).
+#          ZeroTier (gagal bila belum di-authorize) — plus nPerf Server
+#          (bagian12: repo resmi, config 8081/8443, idempotensi, status,
+#          --config-only, jalur offline deferrable, pembersihan uninstall).
 #
 # Pemakaian:  bash tests/e2e_install_test.sh
 #
@@ -36,6 +38,7 @@ auto_update_lib.sh bagian0.sh bagian1_install_dependency.sh bagian2_install_ookl
 bagian3_install_certbot.sh bagian4_install_server_certificate.sh bagian5_update_ooklaserver.sh
 bagian6_automaintenance.sh bagian7_network.sh bagian8_cek_konfigurasi.sh
 bagian9_ssh_access.sh bagian10_hosts_ssh.sh bagian11_self_update.sh
+bagian12_nperf_server.sh
 install.sh ooklaserver.sh uninstall.sh speedtest-selfupdate.sh"
 
 PASS=0; FAIL=0
@@ -1088,6 +1091,346 @@ check "uninstall TIDAK menggantung walau iptables aneh"  '! grep -q "EXIT=124" "
 check "uninstall selesai normal (rc=0)"                  'grep -q "EXIT=0" "'"$WORK"'/uninst3.exit"'
 check "tag cron lama (boot-fallback) ikut dibersihkan"   '! grep -q "speedtest-boot-fallback" "'"$WORK"'/crontab.uninst"'
 check "cron milik operator TIDAK terhapus"               'grep -q "uptime" "'"$WORK"'/crontab.uninst"'
+
+echo
+echo "=== 20) nPerf Server (bagian12): paket, config 8081/8443, status, uninstall ==="
+
+# ── Fixture: tiruan paket resmi nperf-server + shim khusus nPerf ─────────────
+mkdir -p "$WORK/nperf_fix" "$WORK/nperf_shims"
+cat > "$WORK/nperf_fix/nperf-server.conf" <<'EOF'
+#!/bin/bash
+# Konfigurasi nPerf Server (fixture meniru paket resmi nperf-server 2.2.11)
+USER="nperf-server"
+DAEMON="/usr/bin/nPerfServer"
+PID="/var/lib/nperf-server/nPerfServer.pid"
+UUID="/var/lib/nperf-server/nPerfServer.uuid"
+PORT="8080"
+TLS_PORT="8443"
+REDIRECT_PORT_80=1
+REDIRECT_PORT_443=1
+BIND_IP=""
+NB_THREAD=4
+LOG_CONNECTIONS=0
+OPT_ARGS=""
+EOF
+cat > "$WORK/nperf_fix/initd-nperf-server" <<'EOF'
+#!/bin/sh
+case "${1:-start}" in
+  start|restart) printf '%s\n' "$1" >> "${E2E_NPERF_MARKER:-/tmp/nperf-svc.marker}" ;;
+  stop)          printf 'stop\n'   >> "${E2E_NPERF_MARKER:-/tmp/nperf-svc.marker}" ;;
+  status)        echo "nPerfServer running"; exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$WORK/nperf_fix/initd-nperf-server"
+
+# ID distro palsu (bookworm) agar jalur repo APT deb diuji deterministik.
+# CATATAN: $WORK/etc adalah salinan /etc, jadi os-release di sana masih berupa
+# symlink menggantung (→ ../usr/lib/os-release) — SIMLINK ITU HARUS DIHAPUS dulu.
+rm -f "$WORK/etc/os-release"
+printf 'ID=debian\nID_LIKE=debian\nVERSION_ID="12"\nVERSION_CODENAME=bookworm\n' > "$WORK/etc/os-release"
+
+cat > "$WORK/nperf_shims/curl" <<'EOF'
+#!/bin/sh
+# Shim curl: (a) menjawab seperti server nPerf lokal yang hidup, (b) menyajikan
+# kunci/repo resmi nPerf, (c) gagal total bila E2E_NPERF_OFFLINE=1 (uji offline).
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    http://*|https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+case "$url" in
+  *127.0.0.1:8081*|*127.0.0.1:8080*)
+    printf 'HTTP/1.1 200 OK\r\nServer: nPerf/2.2.11\r\nContent-Length: 2\r\n\r\nOK\n'
+    exit 0 ;;
+esac
+if [ -n "${E2E_NPERF_OFFLINE:-}" ]; then exit 22; fi
+case "$url" in
+  *repository.key)
+    [ -n "$out" ] && printf -- '-----BEGIN PGP PUBLIC KEY BLOCK-----\nZmFrZU5QZXJmS2V5\n-----END PGP PUBLIC KEY BLOCK-----\n' > "$out"
+    exit 0 ;;
+  *upload.php.src)
+    [ -n "$out" ] && printf '<?php echo "upload-ok"; ?>\n' > "$out"
+    exit 0 ;;
+esac
+[ -n "$out" ] && : > "$out"
+exit 0
+EOF
+cat > "$WORK/nperf_shims/gpg" <<'EOF'
+#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -n "$out" ] && cat > "$out"
+exit 0
+EOF
+cat > "$WORK/nperf_shims/lsb_release" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+cat > "$WORK/nperf_shims/dpkg" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+  -s|--status)
+    [ "${2:-}" = "nperf-server" ] || exit 1
+    [ -f "$E2E_NPERF_ETC/nperf-installed" ] && exit 0
+    exit 1 ;;
+esac
+exit 0
+EOF
+cat > "$WORK/nperf_shims/dpkg-query" <<'EOF'
+#!/bin/sh
+[ -f "$E2E_NPERF_ETC/nperf-installed" ] && printf '2.2.11\n'
+exit 0
+EOF
+cat > "$WORK/nperf_shims/apt-get" <<'EOF'
+#!/bin/sh
+# Shim apt-get yang benar-benar "memasang" nperf-server (paket tiruan).
+ETC="$E2E_NPERF_ETC"
+case "$*" in
+  *nperf-server*)
+    case "${1:-}" in
+      install)
+        mkdir -p "$ETC/nperf" "$ETC/init.d"
+        [ -f "$ETC/nperf/nperf-server.conf" ] || cp -f "$E2E_NPERF_CONF_SRC" "$ETC/nperf/nperf-server.conf"
+        [ -x "$ETC/init.d/nperf-server" ] || { cp -f "$E2E_NPERF_INITD_SRC" "$ETC/init.d/nperf-server"; chmod 755 "$ETC/init.d/nperf-server"; }
+        touch "$ETC/nperf-installed"
+        ;;
+      remove|purge|--purge)
+        rm -f "$ETC/nperf-installed" "$ETC/nperf/nperf-server.conf" 2>/dev/null
+        ;;
+    esac ;;
+esac
+exit 0
+EOF
+cat > "$WORK/nperf_shims/systemctl" <<'EOF'
+#!/bin/sh
+# Shim systemctl: catat pemanggilan (uji jalur systemd untuk nPerf).
+printf '%s\n' "$*" >> "${E2E_NPERF_SYSCTL:-/tmp/nperf-svc.calls}" 2>/dev/null || true
+exit 0
+EOF
+cat > "$WORK/nperf_shims/nft" <<'EOF'
+#!/bin/sh
+# Shim nft: ruleset disimpan di $E2E_NPERF_NFT (format menyerupai 'nft -a list ruleset').
+RS="${E2E_NPERF_NFT:-/tmp/st-e2e/nft.ruleset}"
+touch "$RS" 2>/dev/null
+act="${1:-}"
+[ "$act" = "-a" ] && act="${2:-}"
+case "$act" in
+  list) cat "$RS" ;;
+  delete)
+    h=""
+    while [ $# -gt 0 ]; do case "$1" in handle) h="$2"; shift 2 ;; *) shift ;; esac; done
+    if [ -n "$h" ] && [ -z "${E2E_NPERF_NFT_LIE:-}" ]; then
+      grep -v "handle $h\$" "$RS" > "$RS.tmp" 2>/dev/null; mv -f "$RS.tmp" "$RS"
+    fi ;;
+esac
+exit 0
+EOF
+chmod +x "$WORK/nperf_shims/"*
+
+# Ruleset nft tiruan: 3 rule ber-comment nPerfServer + 1 rule operator.
+seed_nperf_nft() {
+  cat > "$WORK/nft.ruleset" <<'EOF'
+table ip nat {
+	chain PREROUTING {
+		type nat hook prerouting priority dstnat; policy accept;
+		tcp dport 80 redirect to :8081 comment "nPerfServer" # handle 11
+	}
+}
+table ip6 nat {
+	chain PREROUTING {
+		type nat hook prerouting priority dstnat; policy accept;
+		tcp dport 80 redirect to :8081 comment "nPerfServer" # handle 21
+	}
+}
+table inet filter {
+	chain input {
+		type filter hook input priority filter; policy accept;
+		tcp flags syn limit rate over 260/second drop comment "nPerfServer" # handle 31
+		tcp dport 22 accept comment "operator-ssh" # handle 32
+	}
+}
+EOF
+}
+
+mkdir -p "$WORK/nperfbase"
+for f in $MANAGED_LIST; do [ -f "$WORK/repo/$f" ] && cp -f "$WORK/repo/$f" "$WORK/nperfbase/$f"; done
+cp -f "$WORK/unit/data2.ini" "$WORK/nperfbase/data.ini"
+
+ensure_mock_zt
+ensure_sbin_tools
+ns_run_nperf() {
+  # $1 = perintah di dalam namespace; $2 = env tambahan (opsional)
+  unshare -rm --map-root-user bash -c '
+    WORK="'"$WORK"'"
+    mount --bind "$WORK/etc" /etc 2>/dev/null
+    mount --bind "$WORK/rootfs2" /root 2>/dev/null
+    mount --bind "$WORK/localbin" /usr/local/bin 2>/dev/null
+    mount --bind "$WORK/usr_sbin_fake" /usr/sbin 2>/dev/null
+    export PATH="$WORK/nperf_shims:$WORK/shims:/usr/bin:/bin:/usr/local/bin"
+    export E2E_CRONTAB="$WORK/crontab.nperf"
+    export HOME=/root
+    export E2E_NPERF_ETC="$WORK/etc"
+    export E2E_NPERF_MARKER="$WORK/nperf-svc.marker"
+    export E2E_NPERF_SYSCTL="$WORK/nperf-svc.calls"
+    export E2E_NPERF_NFT="$WORK/nft.ruleset"
+    export E2E_NPERF_CONF_SRC="$WORK/nperf_fix/nperf-server.conf"
+    export E2E_NPERF_INITD_SRC="$WORK/nperf_fix/initd-nperf-server"
+    '"${2:-}"'
+    cd "$WORK/nperfbase" || exit 1
+    '"$1"'
+  '
+}
+
+# ── A. Instalasi bersih: paket + repo resmi + config 8081/8443 + service ─────
+rm -rf "$WORK/etc/nperf" "$WORK/etc/nperf-installed" "$WORK/nperfbase/nperf" "$WORK/nperf-svc.marker"
+rm -f "$WORK/etc/apt/sources.list.d/nperf.list" "$WORK/etc/init.d/nperf-server" "$WORK/nperf-svc.calls"
+seed_nperf_nft
+
+# Helper: pulihkan keadaan "paket nperf-server terpasang (config bawaan)" +
+# berkas repo di BASE_DIR (uninstall memang menghapus script dari BASE_DIR).
+restore_nperf_base() {
+  for f in $MANAGED_LIST; do
+    [ -f "$WORK/repo/$f" ] && cp -f "$WORK/repo/$f" "$WORK/nperfbase/$f"
+  done
+  mkdir -p "$WORK/etc/nperf" "$WORK/etc/init.d"
+  cp -f "$WORK/nperf_fix/nperf-server.conf" "$WORK/etc/nperf/nperf-server.conf"
+  cp -f "$WORK/nperf_fix/initd-nperf-server" "$WORK/etc/init.d/nperf-server"
+  chmod 755 "$WORK/etc/init.d/nperf-server"
+  touch "$WORK/etc/nperf-installed"
+}
+ns_run_nperf 'timeout 150 bash ./bagian12_nperf_server.sh ./data.ini > "$WORK/nperf1.out" 2>&1; echo "EXIT=$?" > "$WORK/nperf1.exit"; exit 0'
+echo "   exit: $(cat "$WORK/nperf1.exit" 2>/dev/null)"
+check "bagian12 instalasi nPerf selesai (rc=0)"        'grep -q "EXIT=0" "'"$WORK"'/nperf1.exit"'
+check "repo APT resmi nPerf ditambahkan"               'grep -qF "repository.nperf.com/api/packages/public/debian bookworm main" "'"$WORK"'/etc/apt/sources.list.d/nperf.list"'
+check "repo APT memakai signed-by (bukan trusted)"     'grep -qF "signed-by=" "'"$WORK"'/etc/apt/sources.list.d/nperf.list"'
+check "kunci GPG repo nPerf terpasang"                 '[ -s "'"$WORK"'/etc/apt/keyrings/nperf.asc" ]'
+check "PORT nPerf di-set 8081"                         'grep -qx "PORT=\"8081\"" "'"$WORK"'/etc/nperf/nperf-server.conf"'
+check "TLS_PORT nPerf di-set 8443"                     'grep -qx "TLS_PORT=\"8443\"" "'"$WORK"'/etc/nperf/nperf-server.conf"'
+check "redirect 80 & 443 nPerf diaktifkan"             'grep -qx "REDIRECT_PORT_80=1" "'"$WORK"'/etc/nperf/nperf-server.conf" && grep -qx "REDIRECT_PORT_443=1" "'"$WORK"'/etc/nperf/nperf-server.conf"'
+check "config nPerf tidak terduplikasi (PORT sekali)"  '[ "$(grep -cE "^[[:space:]]*PORT[[:space:]]*=" "'"$WORK"'/etc/nperf/nperf-server.conf")" = "1" ]'
+check "config asli dicadangkan sebelum diubah"         'grep -q "PORT=\"8080\"" "'"$WORK"'/nperfbase/nperf/backup/nperf-server.conf.bak"'
+NPERF_SVC_CALLS="$(grep -cE "enable nperf-server|start nperf-server|daemon-reload" "$WORK/nperf-svc.calls" 2>/dev/null || true)"
+NPERF_SVC_MARK="$(grep -c "start" "$WORK/nperf-svc.marker" 2>/dev/null || true)"
+check "service nPerf diaktifkan/dijalankan"            '[ "${NPERF_SVC_CALLS:-0}" -ge 1 ] || [ "${NPERF_SVC_MARK:-0}" -ge 1 ]'
+check "state nPerf ditulis (port + versi paket)"       'grep -qx "NPERF_HTTP_PORT=8081" "'"$WORK"'/nperfbase/nperf/.nperf-state" && grep -qx "NPERF_VERSION=2.2.11" "'"$WORK"'/nperfbase/nperf/.nperf-state"'
+check "log nPerf ditulis di BASE_DIR/nperf"            'grep -q "paket nperf-server terpasang" "'"$WORK"'/nperfbase/nperf/install-nperf.log"'
+check "verifikasi HTTP nPerf (Server: nPerf) OK"       'grep -q "nPerf menjawab HTTP di 127.0.0.1:8081" "'"$WORK"'/nperf1.out"'
+check "bagian12 melaporkan selesai (HTTP 8081/TLS 8443)" 'grep -q "Bagian 12 selesai" "'"$WORK"'/nperf1.out" && grep -q "TLS 8443" "'"$WORK"'/nperf1.out"'
+check "ramdisk nPerf TIDAK aktif (default Tidak)"      '! grep -q "Ramdisk nPerf siap" "'"$WORK"'/nperf1.out"'
+
+# ── B. Idempotensi: jalankan ulang tanpa mengubah apa pun ───────────────────
+ns_run_nperf 'timeout 150 bash ./bagian12_nperf_server.sh ./data.ini > "$WORK/nperf2.out" 2>&1; echo "EXIT=$?" > "$WORK/nperf2.exit"; exit 0'
+check "instalasi ulang nPerf tanpa error (idempotent)" 'grep -q "EXIT=0" "'"$WORK"'/nperf2.exit"'
+check "paket TIDAK dipasang ulang (dilewati)"          'grep -q "Paket nperf-server sudah terpasang" "'"$WORK"'/nperf2.out"'
+check "config sudah sesuai → tidak diubah lagi"        'grep -q "Config nPerf sudah sesuai" "'"$WORK"'/nperf2.out"'
+check "repo APT tidak ditulis ulang"                   'grep -q "Repo nPerf (deb) sudah benar" "'"$WORK"'/nperf2.out"'
+
+# ── C. --config-only (dipakai self-update): menegakkan config yang menyimpang ─
+sed -i 's/^PORT="8081"/PORT="8080"/' "$WORK/etc/nperf/nperf-server.conf"
+sed -i 's/^REDIRECT_PORT_443=1/REDIRECT_PORT_443=0/' "$WORK/etc/nperf/nperf-server.conf"
+: > "$WORK/nperf-svc.marker"
+ns_run_nperf 'timeout 150 bash ./bagian12_nperf_server.sh --config-only > "$WORK/nperf3.out" 2>&1; echo "EXIT=$?" > "$WORK/nperf3.exit"; exit 0'
+check "self-update nPerf (--config-only) sukses"       'grep -q "EXIT=0" "'"$WORK"'/nperf3.exit"'
+check "--config-only mengembalikan PORT ke 8081"       'grep -qx "PORT=\"8081\"" "'"$WORK"'/etc/nperf/nperf-server.conf"'
+check "--config-only mengembalikan redirect 443"       'grep -qx "REDIRECT_PORT_443=1" "'"$WORK"'/etc/nperf/nperf-server.conf"'
+NPERF_RST_CALLS="$(grep -c "restart nperf-server" "$WORK/nperf-svc.calls" 2>/dev/null || true)"
+NPERF_RST_MARK="$(grep -c "restart" "$WORK/nperf-svc.marker" 2>/dev/null || true)"
+check "service direstart setelah config berubah"       '[ "${NPERF_RST_CALLS:-0}" -ge 1 ] || [ "${NPERF_RST_MARK:-0}" -ge 1 ]'
+
+# ── C2. Jalur TANPA systemd: /run di-mount tmpfs → /run/systemd/system hilang ─
+: > "$WORK/nperf-svc.marker"
+ns_run_nperf 'mount -t tmpfs tmpfs /run 2>/dev/null || true
+  timeout 150 bash ./bagian12_nperf_server.sh --config-only > "$WORK/nperf3b.out" 2>&1
+  echo "EXIT=$?" > "$WORK/nperf3b.exit"; exit 0'
+NPERF3B_RC="$(grep -c "EXIT=0" "$WORK/nperf3b.exit" 2>/dev/null || true)"
+NPERF3B_MARK="$(grep -cE "start|restart" "$WORK/nperf-svc.marker" 2>/dev/null || true)"
+check "tanpa systemd: nPerf dijalankan via init.d"     '[ "${NPERF3B_RC:-0}" -ge 1 ] && [ "${NPERF3B_MARK:-0}" -ge 1 ]'
+
+# ── D. --status (dipakai speedtestctl nperf-status) ─────────────────────────
+ns_run_nperf 'bash ./bagian12_nperf_server.sh --status > "$WORK/nperf4.out" 2>&1; echo "EXIT=$?" > "$WORK/nperf4.exit"; exit 0'
+check "--status menampilkan ringkasan nPerf"           'grep -q "nPerf Server (layanan speedtest kedua)" "'"$WORK"'/nperf4.out"'
+check "--status menampilkan port 8081 & 8443"          'grep -q "port HTTP  : 8081" "'"$WORK"'/nperf4.out" && grep -q "port TLS   : 8443" "'"$WORK"'/nperf4.out"'
+check "--status menyebut paket terpasang"              'grep -q "paket terpasang" "'"$WORK"'/nperf4.out"'
+
+# ── D2. Debian 13 (trixie): repo nPerf memakai trusted=yes (kunci dirotasi) ──
+printf 'ID=debian\nID_LIKE=debian\nVERSION_ID="13"\nVERSION_CODENAME=trixie\n' > "$WORK/etc/os-release"
+rm -f "$WORK/etc/apt/sources.list.d/nperf.list"
+ns_run_nperf 'timeout 120 bash ./bagian12_nperf_server.sh ./data.ini > "$WORK/nperf4b.out" 2>&1; exit 0'
+NPTRIXIE_A="$(grep -cF "trusted=yes" "$WORK/etc/apt/sources.list.d/nperf.list" 2>/dev/null || true)"
+NPTRIXIE_B="$(grep -cF "trixie main" "$WORK/etc/apt/sources.list.d/nperf.list" 2>/dev/null || true)"
+check "trixie: repo nPerf memakai trusted=yes"         '[ "${NPTRIXIE_A:-0}" -ge 1 ] && [ "${NPTRIXIE_B:-0}" -ge 1 ]'
+printf 'ID=debian\nID_LIKE=debian\nVERSION_ID="12"\nVERSION_CODENAME=bookworm\n' > "$WORK/etc/os-release"
+
+# ── E. NPERF_ENABLED=Tidak → modul dilewati (tidak menyentuh config) ────────
+sed -i 's/^PORT="8081"/PORT="8080"/' "$WORK/etc/nperf/nperf-server.conf"
+sed -i 's/^NPERF_ENABLED="Ya"/NPERF_ENABLED="Tidak"/' "$WORK/nperfbase/speedtest-repo.conf"
+ns_run_nperf 'timeout 120 bash ./bagian12_nperf_server.sh ./data.ini > "$WORK/nperf5.out" 2>&1; echo "EXIT=$?" > "$WORK/nperf5.exit"; exit 0'
+check "NPERF_ENABLED=Tidak → modul dilewati"           'grep -q "modul nPerf dilewati" "'"$WORK"'/nperf5.out"'
+check "modul dilewati tidak mengubah config nPerf"     'grep -qx "PORT=\"8080\"" "'"$WORK"'/etc/nperf/nperf-server.conf"'
+sed -i 's/^NPERF_ENABLED="Tidak"/NPERF_ENABLED="Ya"/' "$WORK/nperfbase/speedtest-repo.conf"
+
+# ── F. Jalur DEFERRABLE: repo nPerf tak terjangkau → install tetap lanjut ───
+rm -rf "$WORK/etc/nperf" "$WORK/etc/nperf-installed" "$WORK/nperfbase/nperf"
+rm -f "$WORK/etc/init.d/nperf-server" "$WORK/etc/apt/sources.list.d/nperf.list"
+ns_run_nperf 'timeout 150 bash ./bagian12_nperf_server.sh ./data.ini > "$WORK/nperf6.out" 2>&1; echo "EXIT=$?" > "$WORK/nperf6.exit"; exit 0' 'export E2E_NPERF_OFFLINE=1'
+check "repo nPerf offline: bagian12 TETAP rc=0"        'grep -q "EXIT=0" "'"$WORK"'/nperf6.exit"'
+check "offline: instalasi paket ditunda (bukan gagal fatal)" 'grep -q "percobaan ulang" "'"$WORK"'/nperf6.out" && grep -q "self-update harian" "'"$WORK"'/nperf6.out"'
+check "offline: kunci repo tidak dipaksa ditulis"      '! grep -q "Repo nPerf (deb) ditambahkan" "'"$WORK"'/nperf6.out"'
+
+# ── G. Uninstall: rule nft nPerfServer, repo, watchdog, paket (opsi --purge) ─
+rm -rf "$WORK/etc/nperf" "$WORK/nperfbase/nperf"
+rm -f "$WORK/etc/nperf-installed"
+restore_nperf_base
+ns_run_nperf 'timeout 120 bash ./bagian12_nperf_server.sh ./data.ini > /dev/null 2>&1; exit 0'
+seed_nperf_nft
+mkdir -p "$WORK/etc/cron.d"; printf '%s\n' '*/2 * * * * root /etc/init.d/nperf-server start' > "$WORK/etc/cron.d/nperf-server"
+: > "$WORK/crontab.nperf"
+ns_run_nperf 'timeout 120 bash ./uninstall.sh --force ./data.ini > "$WORK/uninst-nperf.out" 2>&1; echo "EXIT=$?" > "$WORK/uninst-nperf.exit"; exit 0'
+check "uninstall (default) selesai normal"             'grep -q "EXIT=0" "'"$WORK"'/uninst-nperf.exit"'
+check "rule nft nPerfServer dibersihkan"               '! grep -q "nPerfServer" "'"$WORK"'/nft.ruleset"'
+check "rule operator lain TIDAK terhapus"              'grep -q "operator-ssh" "'"$WORK"'/nft.ruleset"'
+check "repo APT & watchdog cron nPerf dihapus"         '[ ! -f "'"$WORK"'/etc/apt/sources.list.d/nperf.list" ] && [ ! -f "'"$WORK"'/etc/cron.d/nperf-server" ]'
+check "artefak BASE_DIR/nperf dibersihkan"             '[ ! -d "'"$WORK"'/nperfbase/nperf" ]'
+check "paket nPerf DIPERTAHANKAN tanpa --purge"        'grep -q "Paket nperf-server DIPERTAHANKAN" "'"$WORK"'/uninst-nperf.out" && [ -f "'"$WORK"'/etc/nperf-installed" ]'
+
+# Purge: paket + config + UUID ikut hilang (persetujuan via --force).
+restore_nperf_base
+seed_nperf_nft
+ns_run_nperf 'timeout 120 bash ./uninstall.sh --force --purge ./data.ini > "$WORK/uninst-purge.out" 2>&1; echo "EXIT=$?" > "$WORK/uninst-purge.exit"; exit 0'
+check "uninstall --purge selesai normal"               'grep -q "EXIT=0" "'"$WORK"'/uninst-purge.exit"'
+check "--purge menghapus paket nperf-server"           '[ ! -f "'"$WORK"'/etc/nperf-installed" ]'
+check "--purge menghapus config & init script nPerf"   '[ ! -d "'"$WORK"'/etc/nperf" ] && [ ! -f "'"$WORK"'/etc/init.d/nperf-server" ]'
+
+# nft 'berbohong' (delete tak pernah berhasil) → uninstall TIDAK boleh menggantung.
+restore_nperf_base
+seed_nperf_nft
+ns_run_nperf 'timeout 90 bash ./uninstall.sh --force ./data.ini > "$WORK/uninst-nftlie.out" 2>&1; echo "EXIT=$?" > "$WORK/uninst-nftlie.exit"; exit 0' 'export E2E_NPERF_NFT_LIE=1'
+check "uninstall TIDAK menggantung walau nft aneh"     '! grep -q "EXIT=124" "'"$WORK"'/uninst-nftlie.exit"'
+check "sisa rule nPerf dilaporkan (bukan senyap)"      'grep -q "Masih ada" "'"$WORK"'/uninst-nftlie.out" || grep -q "nPerfServer" "'"$WORK"'/uninst-nftlie.out"'
+
+# ── H. Integrasi statis: install.sh / self-update / ctl / uninstall / conf ──
+NP_LINE="$(grep -n 'run_section "bagian12_nperf_server"' "$REPO_ROOT/install.sh" | cut -d: -f1)"
+ZT_LINE="$(grep -n 'run_section "bagian7_network"' "$REPO_ROOT/install.sh" | cut -d: -f1)"
+check "install.sh menjalankan bagian12 (sebelum bagian7)"  '[ -n "$NP_LINE" ] && [ -n "$ZT_LINE" ] && [ "$NP_LINE" -lt "$ZT_LINE" ]'
+check "bagian12 terdaftar di SUPPORT_FILES install.sh"  'grep -q "bagian12_nperf_server.sh" "'"$REPO_ROOT"'/install.sh"'
+check "verify_final memeriksa nPerf (Server: nPerf)"    'grep -q "Server: nPerf" "'"$REPO_ROOT"'/install.sh"'
+check "self-update menegakkan config nPerf"            'grep -q "bagian12_nperf_server.sh\" --config-only" "'"$REPO_ROOT"'/speedtest-selfupdate.sh"'
+check "speedtestctl punya nperf-status/restart/logs"   'grep -q "nperf-status|nperf-restart|nperf-logs" "'"$REPO_ROOT"'/bagian8_cek_konfigurasi.sh"'
+check "open_ports menyertakan port nPerf"              'grep -q "NPERF_HTTP_PORT" "'"$REPO_ROOT"'/common_functions1.sh" && grep -q "NPERF_TLS_PORT" "'"$REPO_ROOT"'/common_functions1.sh"'
+NP_CONF_HITS="$(grep -cE '^NPERF_HTTP_PORT="8081"|^NPERF_TLS_PORT="8443"' "$REPO_ROOT/speedtest-repo.conf" 2>/dev/null || true)"
+check "speedtest-repo.conf: default nPerf 8081/8443"   '[ "${NP_CONF_HITS:-0}" -ge 2 ]'
+check "uninstall punya langkah 7c + opsi --purge"      'grep -q "STEP 7c" "'"$REPO_ROOT"'/uninstall.sh" && grep -q -- "--purge" "'"$REPO_ROOT"'/uninstall.sh"'
+check "uninstall mendaftarkan bagian12 di MANAGED_FILES" 'grep -q "bagian12_nperf_server.sh" "'"$REPO_ROOT"'/uninstall.sh"'
+check "auto_update_lib memutakhirkan bagian12"          'grep -q "bagian12_nperf_server.sh" "'"$REPO_ROOT"'/auto_update_lib.sh"'
+check "regen-checksums memuat bagian12"                 'grep -q "bagian12_nperf_server.sh" "'"$REPO_ROOT"'/tools/regen-checksums.sh"'
+check "instalasi penuh (uji 1) menjalankan bagian12"    'grep -q "Bagian 12: nPerf Server" "'"$WORK"'/install.out"'
+
 echo
 echo "============================================================"
 echo "  HASIL:  $PASS PASS / $FAIL FAIL"

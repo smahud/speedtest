@@ -1,10 +1,11 @@
-# Speedtest OoklaServer Installer (Path-Aware Edition) — v8.1.1
+# Speedtest OoklaServer Installer (Path-Aware Edition) — v8.2.0
 
 Installer otomatis & **non-interaktif** untuk Ookla Speedtest Server, lengkap
 dengan sertifikat Let's Encrypt (Cloudflare / non-Cloudflare, wildcard /
 non-wildcard), auto-start service (systemd / OpenRC / fallback), cron
 maintenance (termasuk **laporan speedtest yang benar-benar terbukti jalan**),
-ZeroTier **wajib** (jaringan kontrol operator), dan self-update otomatis.
+ZeroTier **wajib** (jaringan kontrol operator), self-update otomatis, dan
+**nPerf Server** sebagai layanan speedtest kedua (port 8081/8443).
 
 > **Versi ini telah dirombak total** agar tidak lagi bergantung pada `/root/`.
 > Installer bisa dijalankan dari **direktori mana pun**, dan **semua file
@@ -120,6 +121,11 @@ self-update:
 | `HOSTS_FILE`, `HOSTS_MANAGED`, `HOSTS_MARKER` | `/etc/hosts`, `Ya`, `speedtest-managed` | mapping `RegisteredSpeedtestURL` → 127.0.0.1 |
 | `SSH_KEYS_URL`, `SSH_TARGET_USERS`, `SSH_ROOT_LOGIN`, `SSH_DISABLE_PASSWORD_AUTH` | `github.com/smahud.keys`, `root`, `prohibit-password`, `Tidak` | akses SSH otomatis |
 | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_*` | harian 03:17 | self-update (verifikasi SHA-256 + backup + re-exec) |
+| `NPERF_ENABLED` | `Ya` | modul nPerf Server (layanan speedtest kedua) |
+| `NPERF_HTTP_PORT`, `NPERF_TLS_PORT` | `8081`, `8443` | port HTTP/TLS nPerf (paket nPerf mensyaratkan HTTP 8080/8081) |
+| `NPERF_REDIRECT_80`, `NPERF_REDIRECT_443` | `1` | redirect TCP 80→`NPERF_HTTP_PORT`, 443→`NPERF_TLS_PORT` (nftables, default nPerf) |
+| `NPERF_AUTOSTART` | `Ya` | aktifkan nPerf server saat boot |
+| `NPERF_HTTP_FILES_TMPFS`, `NPERF_TMPFS_SIZE`, `NPERF_HTTP_FILES_MIB` | `Tidak`, `1200M`, `10 100 1024` | ramdisk + berkas uji nPerf (opsional, mode web server eksternal) |
 | `REPORT_HOURLY_ENABLED`, `REPORT_FAST_ENABLED`, `REPORT_FAST_SCHEDULE`, `REPORT_JITTER_MIN_MAX`, `REPORT_LOG_MAX_KB` | `Ya`, `Ya`, `*/5 * * * *`, `50`, `512` | jadwal laporan speedtest, jeda acak (menit), rotasi log (KB) |
 | `SPEEDTEST_CLI_PATH`, `SPEEDTEST_CLI_LICENSE_FLAGS`, `SPEEDTEST_SMOKE_TEST`, `SPEEDTEST_SMOKE_TIMEOUT` | `/usr/local/bin/speedtest`, `--accept-license --accept-gdpr`, `Ya`, `150` | CLI Ookla + penerimaan lisensi non-interaktif + uji laporan |
 | `CRON_PATH` | `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` | PATH untuk **semua** artefak cron (penyebab bug lama: laporan & NAT mati senyap) |
@@ -141,7 +147,7 @@ Yang berjalan otomatis setelah instalasi:
 | `0 * * * *` | `$BASE_DIR/cron-speedtest.sh` | laporan penuh tiap jam (jeda acak 0–50 menit) |
 | `*/5 * * * *` | `$BASE_DIR/cron-speedtest5.sh` | laporan cepat tiap 5 menit (dibatasi CPU bila systemd aktif) |
 | `@reboot` | `$BASE_DIR/bagian10_hosts_ssh.sh --postboot` | hosts + kunci SSH + NAT ZeroTier ditegakkan ulang |
-| `17 3 * * *` | `$BASE_DIR/speedtest-selfupdate.sh` | self-update + penegakan konfigurasi |
+| `17 3 * * *` | `$BASE_DIR/speedtest-selfupdate.sh` | self-update + penegakan konfigurasi (Ookla **dan** nPerf) |
 | `41 4 * * *` / `23 4 * * *` | `cert-check.sh` / `certbot-renew.sh` | pemantau masa berlaku / renewal otomatis (mode Cloudflare) |
 
 Detail penting:
@@ -222,6 +228,9 @@ $BASE_DIR/speedtestctl.sh start|stop|restart
 $BASE_DIR/speedtestctl.sh report       # jalankan 1x laporan speedtest sekarang
 $BASE_DIR/speedtestctl.sh report-log   # 50 baris terakhir log laporan
 $BASE_DIR/speedtestctl.sh logs         # 50 baris terakhir install.log
+$BASE_DIR/speedtestctl.sh nperf-status   # status nPerf Server (layanan kedua)
+$BASE_DIR/speedtestctl.sh nperf-restart  # restart service nPerf
+$BASE_DIR/speedtestctl.sh nperf-logs     # log instalasi nPerf
 $BASE_DIR/speedtestctl.sh uninstall
 ```
 
@@ -233,8 +242,8 @@ bash $BASE_DIR/speedtest-selfupdate.sh              # terapkan
 ```
 
 Service auto-start dibuat sesuai init system:
-- **systemd** → `ooklaserver.service`
-- **OpenRC** (Alpine) → `/etc/init.d/ooklaserver`
+- **systemd** → `ooklaserver.service` (+ `nperf-server.service` di host Debian/RHEL)
+- **OpenRC** (Alpine) → `/etc/init.d/ooklaserver` (nPerf tidak tersedia di Alpine)
 - **fallback** → cron `@reboot`
 
 ---
@@ -255,6 +264,7 @@ Installer aman dijalankan ulang:
 
 ```bash
 bash $BASE_DIR/uninstall.sh --force     # atau tanpa --force untuk konfirmasi
+bash $BASE_DIR/uninstall.sh --purge     # + hapus PAKET nperf-server & UUID-nya
 ```
 
 Yang dihapus: OoklaServer (binary/service/cron/properties), sertifikat domain
@@ -263,9 +273,17 @@ milik operator **tidak** disentuh), ZeroTier (binary + script + moon updater),
 cron milik installer ini saja, entri `/etc/hosts` terkelola, blok kunci SSH
 terkelola, drop-in sshd terkelola, dan **rule NAT ter-scope ZeroTier**.
 
+nPerf Server (bila pernah dipasang) juga dibersihkan: service dihentikan &
+di-disable, **semua rule nftables ber-comment `nPerfServer`** dihapus (redirect
+80/443 di `ip`/`ip6` nat prerouting **dan** rule anti-DOS di `inet filter input`
+— rule anti-DOS tidak dihapus oleh paket nPerf saat service berhenti), repo +
+kunci APT/RPM nPerf dibuang, watchdog `/etc/cron.d/nperf-server` dihapus, dan
+artefak `$BASE_DIR/nperf/` dibuang.
+
 Yang **disisakan**: `data.ini`, `/var/lib/zerotier-one` (agar Node ID tetap
-sama saat instal ulang), `IP forwarding` host, dan seluruh rule NAT milik
-layanan lain (Docker/libvirt/K8s).
+sama saat instal ulang), `IP forwarding` host, seluruh rule NAT milik layanan
+lain (Docker/libvirt/K8s), dan **paket `nperf-server`** (identitas/UUID + sertifikat
+TLS nPerf tetap) kecuali dipanggil dengan `--purge`.
 
 > Penghapusan rule iptables dibatasi jumlahnya (bukan loop tak terbatas) dan
 > memakai path absolut — versi lama bisa menggantung tanpa batas bila backend
@@ -312,8 +330,8 @@ shellcheck -s bash -e SC1091,SC1090,SC2154,SC2034 *.sh tools/*.sh tests/*.sh
 bash -n *.sh                            # validasi sintaks seluruh skrip
 ```
 
-Hasil pengujian rilis **v8.1.1**: `150 PASS / 0 FAIL` (log tersimpan di
-`e2e-logs/run11.log`), audit dependensi `[OK]` tanpa temuan, dan ShellCheck
+Hasil pengujian rilis **v8.2.0**: `206 PASS / 0 FAIL` (log tersimpan di
+`e2e-logs/run16.log`), audit dependensi `[OK]` tanpa temuan, dan ShellCheck
 **0 temuan** pada seluruh skrip produksi (harness memakai pengecualian
 `SC2016/SC2012/SC2086` yang didokumentasikan di kepalanya).
 
@@ -322,7 +340,9 @@ Hasil pengujian rilis **v8.1.1**: `150 PASS / 0 FAIL` (log tersimpan di
   `/usr/sbin`, dan semua tool sistem **di-mock**: menguji instalasi, idempotensi,
   self-update, gerbang ZeroTier, uninstall, mode pipe (`curl | bash`), kasus
   container, laporan cron pada `PATH` minimal, NAT `--postboot`, masa berlaku
-  sertifikat, dan anti-menggantung uninstall.
+  sertifikat, anti-menggantung uninstall, dan **nPerf Server** (paket/repo
+  resmi, config 8081/8443, `--config-only`, `--status`, jalur systemd & init.d,
+  jalur offline, `uninstall`/`--purge`).
 - `tools/audit_cmd_deps.py` menegakkan: setiap perintah opsional wajib
   ber-guard, dan setiap artefak cron wajib menyetel PATH.
 
@@ -348,6 +368,7 @@ bagian8_cek_konfigurasi.sh            # service auto-start + verifikasi + speedt
 bagian9_ssh_access.sh                 # akses SSH (kunci GitHub + konfigurasi sshd)
 bagian10_hosts_ssh.sh                 # entri /etc/hosts + penegakan SSH (dipanggil @reboot & self-update)
 bagian11_self_update.sh               # penjadwalan self-update + boot-sync
+bagian12_nperf_server.sh              # nPerf Server (layanan kedua): repo resmi, config 8081/8443, status
 ooklaserver.sh                        # script resmi Ookla (+ command status)
 uninstall.sh                          # pembersihan menyeluruh (aman untuk sistem)
 data.ini.example                      # contoh konfigurasi
@@ -356,3 +377,56 @@ tools/regen-checksums.sh              # regenerasi checksums.sha256
 tools/publish-version.sh              # snapshot versi (versions/<VERSION>/)
 tools/audit_cmd_deps.py               # audit dependensi perintah & PATH cron
 ```
+
+---
+
+## 12. nPerf Server (Layanan Speedtest Kedua)
+
+Selain OoklaServer, installer memasang **nPerf Server** resmi
+(`nperf-server` dari `repository.nperf.com`) di host yang sama. Keduanya
+berjalan berdampingan tanpa saling mengganggu.
+
+| | OoklaServer (repo ini) | nPerf Server |
+|---|---|---|
+| Port HTTP | `8080` (OoklaServer.properties) | **`8081`** (`PORT`) |
+| Port TLS | 443/5061 (sertifikat Let's Encrypt repo ini) | **`8443`** (`TLS_PORT`, sertifikat dikelola nPerf sendiri) |
+| UDP | `5060` | — (TCP saja) |
+| Redirect 80→HTTP / 443→TLS | — | **aktif** (`REDIRECT_PORT_80=1`, `REDIRECT_PORT_443=1`, nftables) |
+| Manajemen paket | `OoklaServer/ooklaserver.sh` | repo resmi nPerf (apt/dnf/zypper) |
+
+Cara mengatur: semua kunci ada di `speedtest-repo.conf` (lihat bagian 3).
+Menonaktifkan modul: `NPERF_ENABLED="Tidak"` + self-update (atau jalankan ulang
+installer) — config & service nPerf tidak akan disentuh lagi.
+
+Manual (di server):
+
+```bash
+bash $BASE_DIR/bagian12_nperf_server.sh              # pasang/tegakkan ulang
+bash $BASE_DIR/bagian12_nperf_server.sh --config-only # hanya config + service
+bash $BASE_DIR/bagian12_nperf_server.sh --status      # ringkasan (read-only)
+systemctl status nperf-server                         # service (systemd)
+```
+
+Catatan penting:
+
+- **Paket resmi nPerf hanya menyediakan HTTP di `PORT` = 8080 atau 8081** (batasan
+  dari config paket). Karena 8080 dipakai OoklaServer, repo ini memakai 8081.
+- **Sertifikat TLS 8443 dikelola nPerfServer sendiri** (pembaruan otomatis oleh
+  daemon). certbot/Let's Encrypt repo ini **tidak** menyentuh nPerf.
+- **Paket nPerf diperbarui oleh repo resminya** (apt/dnf), bukan oleh
+  self-update repo ini. Self-update hanya **menegakkan config + service**;
+  bila paket belum terpasang (mis. repo nPerf sedang tidak bisa dihubungi saat
+  instalasi awal), instalasi paket dicoba ulang otomatis setiap self-update
+  harian dan **tidak** menggagalkan instalasi Ookla.
+- nPerfServer melayani berkas uji-nya sendiri (`/latency.txt`, `/upload.php`,
+  `/10MiB.dat`, `/100MiB.dat`, `/1GiB.dat`) sehingga **tidak** butuh web server
+  eksternal. Ramdisk 1,2 GB (`NPERF_HTTP_FILES_TMPFS="Ya"`) hanya untuk mode
+  lanjutan.
+- **Alpine tidak didukung** nPerf (tidak ada paket apk) → modul dilewati dengan
+  pesan jelas; OoklaServer tetap berjalan normal.
+- Validasi server nPerf: <https://server-check.nperf.com/>. Pendaftaran ke daftar
+  publik nPerf dilakukan dengan mengajukan server ke nPerf (bukan otomatis oleh
+  installer ini).
+- Log & backup: `$BASE_DIR/nperf/install-nperf.log`,
+  `$BASE_DIR/nperf/backup/nperf-server.conf.bak`, state:
+  `$BASE_DIR/nperf/.nperf-state`.

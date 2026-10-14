@@ -37,6 +37,7 @@ bagian8_cek_konfigurasi.sh
 bagian9_ssh_access.sh
 bagian10_hosts_ssh.sh
 bagian11_self_update.sh
+bagian12_nperf_server.sh
 install.sh
 ooklaserver.sh
 uninstall.sh

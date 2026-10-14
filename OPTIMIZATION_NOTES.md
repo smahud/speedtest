@@ -177,6 +177,27 @@ belum diterapkan) fungsi mengembalikan WARN walau `/etc/sysctl.d` sudah benar.
 **Fix:** nilai runtime diterapkan dengan `sysctl -w`, verifikasi lewat
 `sysctl -n` lalu fallback `/proc/sys`.
 
+## Ronde 3 (v8.2.0) — nPerf Server (layanan kedua)
+
+**Risiko yang dikendalikan (hasil bedah paket resmi nperf-server 2.2.11):**
+1. **Path paket bersifat tetap** (`/usr/bin/nPerfServer`, `/etc/nperf/nperf-server.conf`,
+   `/var/lib/nperf-server/`, unit `nperf-server`) → tidak di-relokasi; yang
+   mengikuti `BASE_DIR` hanya artefak repo (`$BASE_DIR/nperf/`).
+2. **`PORT` wajib 8080 atau 8081** → karena 8080 dipakai OoklaServer, dipakai
+   8081; nilai lain ditolak & dikembalikan ke 8081 dengan peringatan.
+3. **Rule anti-DOS `nftables` bertahan setelah service berhenti**
+   (`inet filter input … comment "nPerfServer"`) → pembersihannya di
+   `uninstall.sh` langkah 7c, dengan batas iterasi + verifikasi tiap langkah
+   (pola yang sama dengan perbaikan C7 di iptables) agar tidak pernah menggantung.
+4. **Sertifikat TLS 8443 milik nPerf** (CERT-UPDATE) → certbot repo ini tidak
+   menyentuh nPerf; tidak ada konflik renewal.
+5. **Watchdog cron bawaan** (`setup-initd-autostart`, `*/2`) → dihapus bila
+   systemd tersedia, agar tidak ada dua mekanisme autostart.
+6. **Alpine tanpa paket apk** → modul dilewati berpesan, instalasi Ookla
+   tetap utuh.
+7. **Kegagalan deferrable** (repo/jaringan nPerf) tidak menggagalkan instalasi
+   utama dan dicoba ulang oleh self-update harian.
+
 ## Status Verifikasi (diuji via harness mock end-to-end)
 - [x] Debian/Ubuntu: alur lengkap bagian0..8 OK, idempoten OK.
 - [x] RHEL/Rocky: OS family terdeteksi `rhel`, systemd unit dibuat OK.
@@ -195,6 +216,11 @@ belum diterapkan) fungsi mengembalikan WARN walau `/etc/sysctl.d` sudah benar.
 - [x] Masa berlaku sertifikat: valid=90 hari → lolos; sisa 5 hari / kedaluwarsa /
       tidak ada → diperbarui (regresi B17).
 - [x] Uninstall tidak menggantung walau iptables "berbohong" (`timeout` 90 s, rc=0).
+- [x] nPerf (v8.2.0): repo resmi ditambahkan (signed-by bookworm / trusted=yes
+      trixie), config ditegakkan 8081/8443 + redirect 80/443, service start &
+      restart (jalur systemd **dan** init.d), `--config-only`, `--status`,
+      jalur offline tetap rc=0, uninstall menghapus semua rule nPerfServer tanpa
+      menggantung walau `nft` "berbohong", dan `--purge` menghapus paket+UUID.
 - [x] Semua file: `bash -n` OK, `shellcheck -S warning` 0 error/0 warning
       (kecuali pengecualian yang didokumentasikan).
 

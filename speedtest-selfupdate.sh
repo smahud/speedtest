@@ -148,6 +148,18 @@ else
   log "bagian10_hosts_ssh.sh tidak ada — langkah penegakan dilewati."
 fi
 
+# ── Penegakan konfigurasi nPerf (bila diaktifkan di speedtest-repo.conf) ─────
+# Hanya MENEGAKKAN config + service (tanpa menyentuh paket) — paket nPerf
+# diperbarui oleh repo resminya sendiri. Bila paket belum ada, modul akan
+# mencoba memasangnya (percobaan ulang otomatis dari instalasi yang gagal).
+if [ "${NPERF_ENABLED:-Ya}" = "Ya" ] && [ -f "$BASE_DIR/bagian12_nperf_server.sh" ]; then
+  if bash "$BASE_DIR/bagian12_nperf_server.sh" --config-only >> "$LOG_FILE" 2>&1; then
+    log "bagian12 (nPerf config) OK."
+  else
+    log "bagian12 (nPerf) mengembalikan error — periksa (bash $BASE_DIR/bagian12_nperf_server.sh --status)."
+  fi
+fi
+
 # ── Uji ringan: apakah CLI Ookla masih bisa dipakai (path + lisensi)? ────────
 # Deteksi dini bug B13/B14 (laporan cron mati) tanpa perlu menjalankan
 # speedtest penuh: cukup pastikan biner ada di path yang dipakai cron.
