@@ -137,6 +137,21 @@ case "$RC" in
     ;;
 esac
 
+# ── Verifikasi integritas pasca-update ───────────────────────────────────────
+# Menangkap kasus file berubah/rusak di server (edit manual, disk korup, dsb).
+# Memakai SATU implementasi: 'install.sh --verify-only' (tanpa menyentuh apa pun).
+if [ -f "$BASE_DIR/install.sh" ] && [ -f "$BASE_DIR/data.ini" ]; then
+  if bash "$BASE_DIR/install.sh" --verify-only >> "$LOG_FILE" 2>&1; then
+    log "Integritas file terkelola OK pasca-update."
+  else
+    log "PERINGATAN: integritas file TIDAK cocok dengan checksums.sha256."
+    log "  Periksa detail: bash \"$BASE_DIR/install.sh\" --verify-only"
+    echo "[WARN] Integritas file tidak cocok — lihat $LOG_FILE" >&2
+  fi
+else
+  log "Verifikasi integritas dilewati (install.sh/data.ini tidak ada)."
+fi
+
 # ── Penegakan konfigurasi wajib (hosts + SSH) ────────────────────────────────
 if [ -f "$BASE_DIR/bagian10_hosts_ssh.sh" ]; then
   if bash "$BASE_DIR/bagian10_hosts_ssh.sh" --postboot >> "$LOG_FILE" 2>&1; then

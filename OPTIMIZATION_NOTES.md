@@ -198,6 +198,30 @@ belum diterapkan) fungsi mengembalikan WARN walau `/etc/sysctl.d` sudah benar.
 7. **Kegagalan deferrable** (repo/jaringan nPerf) tidak menggagalkan instalasi
    utama dan dicoba ulang oleh self-update harian.
 
+## Ronde 4 (v8.2.1) — audit keamanan/ketahanan mandiri
+
+Temuan & perbaikan (ringkas; detail di CHANGELOG v8.2.1):
+
+| # | Temuan | Dampak | Perbaikan |
+|---|---|---|---|
+| A1 | `speedtest-repo.conf` di-`source` (dievaluasi sebagai shell root) | baris berbahaya dieksekusi; komentar inline merusak nilai | dibaca sebagai `KEY=VALUE` (`load_repo_conf`), nama kunci dibatasi, nama berbahaya dilewati |
+| A2 | `au_load_repo_config()` tidak mengenali `NPERF_*` | perubahan `NPERF_ENABLED`/port **tidak pernah** dibaca self-update; self-update dengan service unit berbeda bisa mengembalikan port ke 8080 | loader mengenali seluruh kunci conf; **gerbang otomatis** di `tools/audit_cmd_deps.py` (parity conf) |
+| A3 | Verifikasi `checksums.sha256` hanya per-file saat unduh (tidak ada verifikasi menyeluruh setelah instalasi) | file rusak/dimodifikasi tidak terdeteksi | `verify_checksums_manifest()` + item verifikasi akhir + `install.sh --verify-only` + self-update memverifikasi pasca-update |
+| A4 | Biner pihak ketiga (CLI Ookla, ZeroTier statis) dipasang tanpa hash | eksekusi root dari sumber yang bisa berubah | pin SHA-256 per arsitektur + penolakan bila hash tidak tersedia (`*_ALLOW_UNVERIFIED`) |
+| A5 | Repo APT nPerf memakai `trusted=yes` di Debian 13 | verifikasi tanda tangan apt dimatikan untuk repo itu | diverifikasi ulang (InRelease trixie sah) → `signed-by` untuk semua codename + pin fingerprint kunci; `trusted=yes` hanya jalur darurat |
+| A6 | Backup drop-in sshd di `/tmp` | bisa hilang/ditempel pihak lain; operator tak tahu lokasinya | dipindah ke `/var/backups/speedtest-sshd-dropin.conf.bak` |
+| A7 | Firewall dipilih berdasarkan keberadaan biner | rule bisa ditulis ke backend yang tidak aktif | backend aktif dideteksi (ufw `Status: active` / firewalld `--state`) |
+| A8 | `install.log` tumbuh tanpa batas; `--help` butuh root | disk penuh; UX buruk | rotasi log di awal installer; `--help` bebas root |
+| A9 | `speedtestctl nperf-restart` bisa gagal senyap tanpa systemd & init.d | operator bingung | pesan jelas + saran perintah |
+| A10 | nPerf ramdisk: `cp` sebelum `mkdir`, path tetap | berkas HTTP tidak tersalin tanpa jejak | `mkdir -p` sebelum salin, `NPERF_HTTP_FILES_DIR` konfigurable |
+| A11 | Substitusi placeholder `sed -i "s|__X__|$VAR|"` di `bagian8`/`bagian4`: nilai berisi `&` atau `|` merusak file hasil generate (`&` = backreference, `|` = delimiter) | file konfigurasi/script hasil generate korup senyap bila path sistem memuat karakter tsb | helper `sed_escape_repl()` (escape `\`, `&`, `|`) dipakai di **semua** 10 titik substitusi + uji E2E (unit + simulasi `sed` nyata) |
+| A12 | Kegagalan repo nPerf (termasuk **penolakan kunci asing**) bersifat DEFERRABLE → instalasi lanjut, tetapi ringkasan akhir tidak menyebut bahwa repo tidak terpasang | operator mengira pembaruan paket nPerf mengalir otomatis padahal tidak | penanda internal `repo_skipped` + peringatan penutup eksplisit di mode install **dan** `--config-only` (self-update) |
+| A13 | Fungsi `die()` mati di blok fallback `bagian7` (SC2329) | kode mati membingungkan & menutupi temuan ShellCheck nyata | dihapus; ShellCheck 0 temuan di **seluruh** 22 skrip (`bash -s` + pengecualian terdokumentasi) |
+
+**Kredensial (operasional, di luar kode):** token Cloudflare nyata masih
+dapat diunduh publik dari commit lama `autocertbot.sh` di GitHub → harus
+**dirotasi**; PAT GitHub yang pernah dipakai push harus **dicabut**.
+
 ## Status Verifikasi (diuji via harness mock end-to-end)
 - [x] Debian/Ubuntu: alur lengkap bagian0..8 OK, idempoten OK.
 - [x] RHEL/Rocky: OS family terdeteksi `rhel`, systemd unit dibuat OK.

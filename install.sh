@@ -125,13 +125,6 @@ _sha256_of() {
   fi
 }
 
-# Harus root (juga berlaku untuk `curl ... | sudo bash`).
-if [ "$(id -u)" -ne 0 ]; then
-  _boot_err "Installer ini harus dijalankan sebagai root."
-  _boot_err "Contoh: curl -fsSL <URL install.sh> | sudo bash"
-  exit 1
-fi
-
 # ── Deteksi mode jalan: sebagai file atau via pipe (curl | bash) ──────────────
 _SELF_SRC="${BASH_SOURCE[0]:-$0}"
 SELF_MODE="file"
@@ -144,8 +137,20 @@ else
 fi
 export SPEEDTEST_SCRIPT_DIR SELF_MODE
 
-# --- Tentukan lokasi data.ini ---
-ARG_CFG="${1:-}"
+# --- Argumen: [data.ini] | --verify-only | --help ---
+VERIFY_ONLY=0
+ARG_CFG=""
+for _arg in "$@"; do
+  case "$_arg" in
+    --verify-only|--verify) VERIFY_ONLY=1 ;;
+    --help|-h)
+      printf '%s\n' "Penggunaan: bash install.sh [data.ini | /path/ke/dir] [--verify-only]"
+      printf '%s\n' "  --verify-only  verifikasi integritas file terkelola (checksums.sha256) lalu keluar"
+      exit 0 ;;
+    -*) : ;;
+    *)  [ -n "$ARG_CFG" ] || ARG_CFG="$_arg" ;;
+  esac
+done
 CONFIG_PATH=""
 if [ -n "$ARG_CFG" ]; then
   if [ -d "$ARG_CFG" ]; then ARG_CFG="$ARG_CFG/data.ini"; fi
@@ -166,6 +171,14 @@ fi
 BASE_DIR="$(cd "$(dirname "$CONFIG_PATH")" && pwd)"
 export CONFIG_PATH BASE_DIR
 
+# Harus root (juga berlaku untuk `curl ... | sudo bash`). Diletakkan SETELAH
+# parsing argumen supaya 'bash install.sh --help' bisa dibaca siapa saja.
+if [ "$(id -u)" -ne 0 ]; then
+  _boot_err "Installer ini harus dijalankan sebagai root."
+  _boot_err "Contoh: curl -fsSL <URL install.sh> | sudo bash"
+  exit 1
+fi
+
 # --- Pastikan wget/curl tersedia untuk bootstrap ---
 if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
   _boot_info "wget/curl belum ada, mencoba memasang..."
@@ -185,9 +198,11 @@ if [ "$SELF_MODE" = "piped" ] && [ ! -f "$BASE_DIR/install.sh" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tentukan REPO_RAW_BASE efektif (hormati override env untuk fork/uji)
+# Tentukan REPO_RAW_BASE efektif (hormati override env untuk fork/uji).
+# Pada mode --verify-only langkah probe jaringan ini DILEWATI supaya verifikasi
+# tetap bisa berjalan tanpa koneksi internet.
 # ─────────────────────────────────────────────────────────────────────────────
-if [ "$REPO_RAW_BASE_FROM_ENV" != "1" ]; then
+if [ "$REPO_RAW_BASE_FROM_ENV" != "1" ] && [ "$VERIFY_ONLY" -ne 1 ]; then
   REPO_RAW_BASE="$BASE_REPO"
   _V_TMP="$BASE_DIR/.version-probe.$$"
   if _fetch "$BASE_REPO/VERSION" "$_V_TMP" 2>/dev/null; then
@@ -295,7 +310,13 @@ ensure_support_files() {
   fi
   return 0
 }
-ensure_support_files
+# Mode --verify-only: jangan sentuh/unduh apa pun — kita justru MEMERIKSA isi
+# direktori apa adanya (tanpa menyamarkan file yang rusak/berubah).
+if [ "$VERIFY_ONLY" -ne 1 ]; then
+  ensure_support_files
+else
+  _boot_info "Mode --verify-only: sinkronisasi file dilewati (memeriksa isi apa adanya)."
+fi
 
 # Mulai sekarang BASE_DIR adalah "rumah" script.
 SPEEDTEST_SCRIPT_DIR="$BASE_DIR"
@@ -316,6 +337,24 @@ fi
 
 resolve_config_path "$CONFIG_PATH"
 init_paths
+
+# ── Mode --verify-only: verifikasi integritas file, tanpa mengubah sistem ────
+if [ "$VERIFY_ONLY" -eq 1 ]; then
+  log_info "Mode --verify-only: memeriksa integritas file di $BASE_DIR (tanpa perubahan)."
+  verify_checksums_manifest "$BASE_DIR"
+  _vrc=$?
+  print_hash 50
+  case "$_vrc" in
+    0) log_ok "Verifikasi selesai: semua file cocok." ; exit 0 ;;
+    1) log_error "Verifikasi GAGAL: ada file yang tidak cocok/hilang (lihat peringatan di atas)." ; exit 1 ;;
+    *) log_warn "Verifikasi tidak dapat diselesaikan (checksums.sha256 tidak ada?)." ; exit 2 ;;
+  esac
+fi
+
+# Rotasi log installer (agar tidak tumbuh tanpa batas di server produksi).
+if command -v rotate_log_kb >/dev/null 2>&1 && [ -n "${LOG_FILE:-}" ]; then
+  rotate_log_kb "$LOG_FILE" "$(( ${AUTO_UPDATE_MAX_LOG_MB:-5} * 1024 ))" || true
+fi
 
 log_info "==================================================="
 log_info " Installer Speedtest OoklaServer"
@@ -654,7 +693,10 @@ verify_final() {
     fi
   fi
 
-  # 9) nPerf Server (layanan kedua) — hanya bila diaktifkan di repo conf.
+  # 9) Integritas file terkelola (checksums.sha256) — deteksi kerusakan/rusak
+  verify_checksums_manifest "$BASE_DIR" || true
+
+  # 10) nPerf Server (layanan kedua) — hanya bila diaktifkan di repo conf.
   if [ "${NPERF_ENABLED:-Ya}" = "Ya" ]; then
     local np_http="${NPERF_HTTP_PORT:-8081}" np_out=""
     if command_exists curl; then
@@ -676,6 +718,7 @@ log_info "Versi script    : $(head -1 "$BASE_DIR/VERSION" 2>/dev/null | tr -d '[
 log_info "Management tool : $BASE_DIR/speedtestctl.sh"
 log_info "Self-update     : $BASE_DIR/speedtest-selfupdate.sh (cron harian otomatis)"
 log_info "Cek pembaruan   : bash $BASE_DIR/speedtest-selfupdate.sh --dry-run"
+log_info "Verifikasi file : bash $BASE_DIR/install.sh --verify-only"
 log_info "Cleanup total   : bash $BASE_DIR/uninstall.sh"
 log_info ""
 log_info "ZeroTier (wajib, hardcode di speedtest-repo.conf):"

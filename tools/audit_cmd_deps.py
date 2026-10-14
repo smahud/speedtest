@@ -303,6 +303,119 @@ def installer_packages():
     return pkgs
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# F–I. Audit konfigurasi & integritas (hardening v8.2.1)
+#   Kelas bug yang dicegah: kunci speedtest-repo.conf yang DIABAIKAN karena
+#   tidak ada di au_load_repo_config (kasus NPERF_* di v8.2.0), kunci repo yang
+#   dieksekusi sebagai shell, hilangnya gerbang verifikasi checksum, dan
+#   hilangnya pin SHA-256 untuk biner pihak ketiga.
+# ═══════════════════════════════════════════════════════════════════════════════
+def _read(path: str) -> str:
+    try:
+        return open(path, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return ""
+
+
+def config_parity_audit() -> bool:
+    ok = True
+    conf = os.path.join(REPO, "speedtest-repo.conf")
+    au = os.path.join(REPO, "auto_update_lib.sh")
+    common = os.path.join(REPO, "common_functions1.sh")
+    install = os.path.join(REPO, "install.sh")
+    selfup = os.path.join(REPO, "speedtest-selfupdate.sh")
+    b1 = os.path.join(REPO, "bagian1_install_dependency.sh")
+    b7 = os.path.join(REPO, "bagian7_network.sh")
+
+    # ── F. Parity kunci: speedtest-repo.conf ↔ au_load_repo_config() ──────────
+    print("=== F. Parity kunci speedtest-repo.conf ↔ au_load_repo_config() ===")
+    conf_text = _read(conf)
+    conf_keys = set(re.findall(r"^([A-Z_][A-Z0-9_]*)=", conf_text, re.M))
+    au_text = _read(au)
+    m = re.search(r"au_load_repo_config\(\)\s*\{.*?\n\}", au_text, re.S)
+    au_keys = set()
+    if m:
+        au_keys = set(re.findall(r"^\s+([A-Z_][A-Z0-9_]*)\)", m.group(0), re.M))
+    ignored = sorted(conf_keys - au_keys)
+    if ignored:
+        ok = False
+        print("   [MASALAH] kunci ini ada di speedtest-repo.conf tetapi TIDAK")
+        print("             dibaca au_load_repo_config() (akan diabaikan senyap):")
+        for k in ignored:
+            print(f"             - {k}")
+    else:
+        print(f"   OK: {len(conf_keys)} kunci conf semuanya dikenali loader.")
+    print()
+
+    # ── G. speedtest-repo.conf TIDAK boleh dieksekusi sebagai shell ───────────
+    print("=== G. speedtest-repo.conf tidak dieksekusi sebagai shell ===")
+    offenders = []
+    prod = []
+    for root, dirs, names in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in {".git", "legacy", "versions", "node_modules", "tests", "tools"}]
+        for n in names:
+            if n.endswith(".sh"):
+                prod.append(os.path.join(root, n))
+    for path in sorted(prod):
+        rel = os.path.relpath(path, REPO)
+        for lineno, line in enumerate(_read(path).splitlines(), 1):
+            stripped = strip_inline_comment(line)
+            if "speedtest-repo.conf" not in stripped:
+                continue
+            if re.search(r"(^|[;&|(]|\s)(\.|source)\s+\S*speedtest-repo\.conf", stripped):
+                offenders.append(f"{rel}:{lineno}")
+    if offenders:
+        ok = False
+        print("   [MASALAH] file conf dieksekusi (source) — gunakan load_repo_conf():")
+        for o in offenders:
+            print(f"             - {o}")
+    else:
+        print("   OK: tidak ada 'source speedtest-repo.conf' di jalur produksi.")
+    print()
+
+    # ── H. Gerbang verifikasi integritas wajib ada ───────────────────────────
+    print("=== H. Gerbang verifikasi integritas (checksums.sha256) ===")
+    need = [
+        (common, "verify_checksums_manifest()", "fungsi verify_checksums_manifest"),
+        (common, "sha256_of_file()", "fungsi sha256_of_file"),
+        (install, "--verify-only", "mode install.sh --verify-only"),
+        (install, "verify_checksums_manifest", "pemanggilan verifikasi di install.sh"),
+    ]
+    miss = [desc for path, token, desc in need if token not in _read(path)]
+    # Self-update boleh memakai fungsi langsung ATAU memanggil install.sh
+    # --verify-only (satu implementasi); salah satu wajib ada.
+    selfup_text = _read(selfup)
+    if "verify_checksums_manifest" not in selfup_text and "--verify-only" not in selfup_text:
+        miss.append("verifikasi pasca-update di self-update")
+    if miss:
+        ok = False
+        print("   [MASALAH] gerbang integritas hilang/tidak lengkap:")
+        for d in miss:
+            print(f"             - {d}")
+    else:
+        print("   OK: verifikasi checksum tersedia di common, install.sh, dan self-update.")
+    print()
+
+    # ── I. Pin SHA-256 untuk biner pihak ketiga ──────────────────────────────
+    print("=== I. Pin SHA-256 biner pihak ketiga ===")
+    b1t, b7t = _read(b1), _read(b7)
+    problems = []
+    if "OOKLA_CLI_SHA256_X86_64" not in b1t or "OOKLA_CLI_ALLOW_UNVERIFIED" not in b1t:
+        problems.append("bagian1: pin/penolakan hash CLI Ookla tidak ditemukan")
+    if "OOKLA_CLI_ALLOW_UNVERIFIED" in b1t and "biner TIDAK dipasang" not in b1t:
+        problems.append("bagian1: tidak menolak saat hash tidak tersedia")
+    if "ZT_ALLOW_UNPINNED_BINARY" not in b7t or "Biner TIDAK dipasang" not in b7t:
+        problems.append("bagian7: pin/penolakan hash biner ZeroTier tidak ditemukan")
+    if problems:
+        ok = False
+        print("   [MASALAH] verifikasi biner pihak ketiga tidak lengkap:")
+        for p_ in problems:
+            print(f"             - {p_}")
+    else:
+        print("   OK: CLI Ookla & biner ZeroTier diverifikasi sebelum dipasang.")
+    print()
+    return ok
+
 def main() -> int:
     files = []
     for root, dirs, names in os.walk(REPO):
@@ -400,6 +513,10 @@ def main() -> int:
             extra = "" if len(locs) <= 4 else f" (+{len(locs) - 4} lokasi)"
             print(f"   - {cmd:<16} {', '.join(locs[:4])}{extra}")
         print()
+
+    # ── F–I. Audit konfigurasi & integritas (hardening v8.2.1) ───────────────
+    if not config_parity_audit():
+        bad = True
 
     if not bad:
         print("[OK] Tidak ada perintah opsional tanpa guard di jalur produksi.")

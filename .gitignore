@@ -4,6 +4,9 @@ data.ini.*
 *.local.ini
 
 # Artefak runtime installer (dibuat di server, bukan di repo)
+nperf/
+report.log
+report.log.1
 install.log
 update.log
 update.log.1

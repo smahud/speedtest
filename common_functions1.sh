@@ -23,9 +23,50 @@ SPEEDTEST_COMMON_LOADED=1
 # sini akan berlaku ke seluruh server yang terinstal dari repo ini.
 # -----------------------------------------------------------------------------
 SPEEDTEST_REPO_CONF_DIR="${BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)}"
+
+# ── Parser & pemuat speedtest-repo.conf (TANPA eksekusi kode shell) ──────────
+# Versi lama men-`source` file ini sehingga setiap baris adalah kode shell yang
+# dieksekusi sebagai root. Sejak v8.2.1 file hanya DIBACA sebagai KEY=VALUE:
+# komentar inline dibuang, kutip dilepas, nilai di-export. Nama kunci dibatasi
+# A-Za-z0-9_ dan sejumlah nama berbahaya (PATH/IFS/LD_*/BASH_*/…) dilewati.
+# Semantik (identik dengan au_parse_value di auto_update_lib.sh):
+#   - nilai ber-kutip  → isi kutip diambil apa adanya (termasuk karakter '#')
+#   - nilai tanpa kutip→ komentar dimulai pada '#' pertama, spasi akhir dibuang
+repo_conf_parse_value() {
+    local v
+    v="$(printf '%s' "$1" | sed -e 's/^[[:space:]]*//')"
+    case "$v" in
+        \"*) v="${v#\"}"; v="${v%%\"*}" ;;
+        \'*) v="${v#\'}"; v="${v%%\'*}" ;;
+        *)   v="${v%%#*}"
+             v="$(printf '%s' "$v" | sed -e 's/[[:space:]]*$//')" ;;
+    esac
+    printf '%s' "$v"
+}
+
+load_repo_conf() {
+    local f="${1:-}"
+    [ -n "$f" ] && [ -f "$f" ] || return 0
+    local line key val
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in *=*) ;; *) continue ;; esac
+        key="${line%%=*}"
+        key="$(printf '%s' "$key" | tr -d '[:space:]')"
+        case "$key" in ''|*[!A-Za-z0-9_]*) continue ;; esac
+        case "$key" in
+            PATH|IFS|ENV|BASH_ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|CDPATH|GLOBIGNORE)
+                continue ;;
+            LD_*|BASH_FUNC_*) continue ;;
+        esac
+        val="$(repo_conf_parse_value "${line#*=}")"
+        export "$key=$val"
+    done < "$f"
+    return 0
+}
+
 if [ -f "$SPEEDTEST_REPO_CONF_DIR/speedtest-repo.conf" ]; then
-    # shellcheck source=speedtest-repo.conf
-    . "$SPEEDTEST_REPO_CONF_DIR/speedtest-repo.conf"
+    load_repo_conf "$SPEEDTEST_REPO_CONF_DIR/speedtest-repo.conf"
 fi
 export SPEEDTEST_REPO_CONF_DIR
 
@@ -349,7 +390,20 @@ open_ports() {
     fi
 
     log_info "Konfigurasi Firewall (TCP: $tcp_list; UDP: ${udp_list:-$zt_ports})..."
-    if command -v ufw >/dev/null 2>&1; then
+    # Pilih backend firewall yang MEMANG aktif (bila hanya biner-nya ada tapi
+    # tidak aktif, rule tetap disiapkan agar siap saat diaktifkan).
+    local fw_backend=""
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status:[[:space:]]*active'; then
+        fw_backend="ufw"
+    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        fw_backend="firewalld"
+    elif command -v ufw >/dev/null 2>&1; then
+        fw_backend="ufw"
+    elif command -v firewall-cmd >/dev/null 2>&1; then
+        fw_backend="firewalld"
+    fi
+
+    if [ "$fw_backend" = "ufw" ]; then
         ufw allow 80/tcp >/dev/null 2>&1; ufw allow 443/tcp >/dev/null 2>&1
         for p in $zt_ports; do
             ufw allow "$p"/tcp >/dev/null 2>&1 || true
@@ -359,7 +413,7 @@ open_ports() {
             ufw allow "${NPERF_HTTP_PORT:-8081}"/tcp >/dev/null 2>&1 || true
             ufw allow "${NPERF_TLS_PORT:-8443}"/tcp >/dev/null 2>&1 || true
         fi
-    elif command -v firewall-cmd >/dev/null 2>&1; then
+    elif [ "$fw_backend" = "firewalld" ]; then
         firewall-cmd --permanent --add-port={80/tcp,443/tcp} >/dev/null 2>&1
         for p in $zt_ports; do
             firewall-cmd --permanent --add-port="$p"/tcp >/dev/null 2>&1 || true
@@ -462,6 +516,91 @@ ookla_cli_is_official() {
     if [ -z "$bin" ]; then bin="$(ookla_cli_path)"; fi
     [ -n "$bin" ] || return 1
     "$bin" --version 2>/dev/null | grep -qi 'ookla'
+}
+
+# Escape nilai agar aman dipakai sebagai REPLACEMENT pada 'sed s|..|NILAI|'.
+# Tanpa ini, path/nilai yang mengandung '&' (artinya "teks yang cocok") atau
+# '|' (delimiter) akan MERUSAK file hasil generate (mis. speedtestctl.sh).
+sed_escape_repl() {
+    local v="${1:-}"
+    v="${v//\\/\\\\}"          # backslash → double backslash
+    printf '%s' "$v" | sed -e 's/[&|]/\\&/g'
+}
+
+# ── Integritas file terkelola (checksums.sha256) ─────────────────────────────
+# sha256_of_file FILE → cetak hash (sha256sum → busybox → openssl dgst)
+sha256_of_file() {
+    local f="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$f" 2>/dev/null | awk '{print $1}'
+        return 0
+    fi
+    if command -v busybox >/dev/null 2>&1; then
+        busybox sha256sum "$f" 2>/dev/null | awk '{print $1}'
+        return 0
+    fi
+    if command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$f" 2>/dev/null | awk '{print $NF}'
+        return 0
+    fi
+    printf ''
+    return 0
+}
+
+# verify_checksums_manifest [DIR]
+#   Verifikasi SELURUH file pada DIR/checksums.sha256 terhadap isi DIR.
+#   Return: 0 = semua cocok, 1 = ada tidak cocok/hilang, 2 = tidak bisa
+#   diverifikasi (file manifest/tool hash tidak ada).
+#   Dipakai install.sh (instalasi & --verify-only) dan speedtest-selfupdate.sh.
+verify_checksums_manifest() {
+    local dir="${1:-${BASE_DIR:-.}}"
+    local sumf="$dir/checksums.sha256"
+    local line want rest rel got n=0 ok=0 bad="" missing=""
+    if [ ! -s "$sumf" ]; then
+        log_warn "checksums.sha256 tidak ada di $dir — verifikasi integritas dilewati."
+        return 2
+    fi
+    if [ -z "$(sha256_of_file "$sumf")" ] && ! command -v sha256sum >/dev/null 2>&1 \
+       && ! command -v busybox >/dev/null 2>&1 && ! command -v openssl >/dev/null 2>&1; then
+        log_warn "Tidak ada tool SHA-256 (sha256sum/busybox/openssl) — verifikasi dilewati."
+        return 2
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        want="${line%% *}"
+        rest="${line#* }"
+        rel="${rest# }"
+        rel="${rel%% *}"
+        # Tolak path absolut / traversal (manifest tidak boleh keluar DIR).
+        case "$rel" in ''|/*|..|*..*) continue ;; esac
+        [ -n "$want" ] || continue
+        n=$((n + 1))
+        if [ ! -f "$dir/$rel" ]; then
+            missing="$missing $rel"
+            continue
+        fi
+        got="$(sha256_of_file "$dir/$rel")"
+        if [ -z "$got" ]; then
+            log_warn "Hash file '$rel' tidak bisa dihitung — verifikasi dilewati."
+            return 2
+        fi
+        if [ "$got" = "$want" ]; then
+            ok=$((ok + 1))
+        else
+            bad="$bad $rel"
+        fi
+    done < "$sumf"
+    if [ -n "$bad" ]; then
+        log_warn "$((n - ok)) file TIDAK cocok dengan checksums.sha256:$bad"
+    fi
+    if [ -n "$missing" ]; then
+        log_warn "File pada manifest tidak ditemukan:$missing"
+    fi
+    if [ -z "$bad" ] && [ -z "$missing" ]; then
+        log_ok "Integritas file terkelola OK ($ok/$n file cocok dengan checksums.sha256)."
+        return 0
+    fi
+    return 1
 }
 
 ookla_license_file() { printf '%s' "${HOME:-/root}/.config/ookla/speedtest-cli.json"; }

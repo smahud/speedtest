@@ -1,4 +1,4 @@
-# Speedtest OoklaServer Installer (Path-Aware Edition) — v8.2.0
+# Speedtest OoklaServer Installer (Path-Aware Edition) — v8.2.1
 
 Installer otomatis & **non-interaktif** untuk Ookla Speedtest Server, lengkap
 dengan sertifikat Let's Encrypt (Cloudflare / non-Cloudflare, wildcard /
@@ -125,11 +125,18 @@ self-update:
 | `NPERF_HTTP_PORT`, `NPERF_TLS_PORT` | `8081`, `8443` | port HTTP/TLS nPerf (paket nPerf mensyaratkan HTTP 8080/8081) |
 | `NPERF_REDIRECT_80`, `NPERF_REDIRECT_443` | `1` | redirect TCP 80→`NPERF_HTTP_PORT`, 443→`NPERF_TLS_PORT` (nftables, default nPerf) |
 | `NPERF_AUTOSTART` | `Ya` | aktifkan nPerf server saat boot |
-| `NPERF_HTTP_FILES_TMPFS`, `NPERF_TMPFS_SIZE`, `NPERF_HTTP_FILES_MIB` | `Tidak`, `1200M`, `10 100 1024` | ramdisk + berkas uji nPerf (opsional, mode web server eksternal) |
+| `NPERF_HTTP_FILES_TMPFS`, `NPERF_TMPFS_SIZE`, `NPERF_HTTP_FILES_MIB` | `Tidak`, `1200M`, `10 100 1024` | ramdisk + ukuran berkas uji nPerf (opsional, mode web server eksternal) |
+| `NPERF_HTTP_FILES_DIR` | `/var/www/html/nperf` | direktori berkas HTTP nPerf (ubah bila memakai docroot nginx/apache) |
+| `NPERF_APT_TRUSTED` | `Tidak` | `Ya` = repo nPerf memakai `[trusted=yes]` — darurat saja (mematikan verifikasi tanda tangan apt) |
+| `NPERF_GPG_FINGERPRINT` | fingerprint resmi nPerf | pin fingerprint kunci repo nPerf; kunci dengan fingerprint berbeda **ditolak** |
 | `REPORT_HOURLY_ENABLED`, `REPORT_FAST_ENABLED`, `REPORT_FAST_SCHEDULE`, `REPORT_JITTER_MIN_MAX`, `REPORT_LOG_MAX_KB` | `Ya`, `Ya`, `*/5 * * * *`, `50`, `512` | jadwal laporan speedtest, jeda acak (menit), rotasi log (KB) |
 | `SPEEDTEST_CLI_PATH`, `SPEEDTEST_CLI_LICENSE_FLAGS`, `SPEEDTEST_SMOKE_TEST`, `SPEEDTEST_SMOKE_TIMEOUT` | `/usr/local/bin/speedtest`, `--accept-license --accept-gdpr`, `Ya`, `150` | CLI Ookla + penerimaan lisensi non-interaktif + uji laporan |
 | `CRON_PATH` | `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` | PATH untuk **semua** artefak cron (penyebab bug lama: laporan & NAT mati senyap) |
 | `TLS_VERIFY_ENABLED`, `TLS_VERIFY_STRICT`, `CERT_MIN_VALID_DAYS` | `Ya`, `Tidak`, `10` | verifikasi endpoint TLS + ambang masa berlaku sertifikat |
+| `OOKLA_CLI_SHA256` | `""` (pin bawaan) | pin SHA-256 tarball CLI Ookla (kosong = hash bawaan per arsitektur) |
+| `OOKLA_CLI_ALLOW_UNVERIFIED` | `Tidak` | `Ya` = izinkan pemasangan CLI Ookla tanpa verifikasi hash |
+| `ZT_BIN_SHA256` | `""` (pin bawaan) | pin SHA-256 biner statis ZeroTier (fallback Alpine) |
+| `ZT_ALLOW_UNPINNED_BINARY` | `Tidak` | `Ya` = izinkan biner ZeroTier tanpa pin hash |
 
 > `CERT_MIN_VALID_DAYS=10` berarti sertifikat dengan sisa masa berlaku < 10
 > hari dianggap **tidak layak** dan akan diterbitkan ulang (versi lama hanya
@@ -231,6 +238,7 @@ $BASE_DIR/speedtestctl.sh logs         # 50 baris terakhir install.log
 $BASE_DIR/speedtestctl.sh nperf-status   # status nPerf Server (layanan kedua)
 $BASE_DIR/speedtestctl.sh nperf-restart  # restart service nPerf
 $BASE_DIR/speedtestctl.sh nperf-logs     # log instalasi nPerf
+$BASE_DIR/speedtestctl.sh verify         # verifikasi integritas semua file (checksums.sha256)
 $BASE_DIR/speedtestctl.sh uninstall
 ```
 
@@ -330,10 +338,11 @@ shellcheck -s bash -e SC1091,SC1090,SC2154,SC2034 *.sh tools/*.sh tests/*.sh
 bash -n *.sh                            # validasi sintaks seluruh skrip
 ```
 
-Hasil pengujian rilis **v8.2.0**: `206 PASS / 0 FAIL` (log tersimpan di
-`e2e-logs/run16.log`), audit dependensi `[OK]` tanpa temuan, dan ShellCheck
+Hasil pengujian rilis **v8.2.1**: `241 PASS / 0 FAIL` (log tersimpan di
+`e2e-logs/run21.log`), audit dependensi `[OK]` tanpa temuan, dan ShellCheck
 **0 temuan** pada seluruh skrip produksi (harness memakai pengecualian
-`SC2016/SC2012/SC2086` yang didokumentasikan di kepalanya).
+`SC2016/SC2012/SC2086` yang didokumentasikan di kepalanya). Rilis v8.2.0
+sebelumnya: `206 PASS / 0 FAIL` (`e2e-logs/run16.log`).
 
 - `tests/e2e_install_test.sh` menjalankan instalasi nyata di dalam
   `unshare -rm --map-root-user` dengan `/etc`, `/root`, `/usr/local/bin`,
@@ -413,6 +422,10 @@ Catatan penting:
   dari config paket). Karena 8080 dipakai OoklaServer, repo ini memakai 8081.
 - **Sertifikat TLS 8443 dikelola nPerfServer sendiri** (pembaruan otomatis oleh
   daemon). certbot/Let's Encrypt repo ini **tidak** menyentuh nPerf.
+- Repo nPerf diverifikasi: apt memakai `signed-by` (bukan `trusted=yes`) dan
+  fingerprint kunci repo dicek terhadap `NPERF_GPG_FINGERPRINT`
+  (default: fingerprint resmi nPerf `54BA36ED…60AE1B3C`, yang menandatangani
+  `InRelease` bookworm **dan** trixie).
 - **Paket nPerf diperbarui oleh repo resminya** (apt/dnf), bukan oleh
   self-update repo ini. Self-update hanya **menegakkan config + service**;
   bila paket belum terpasang (mis. repo nPerf sedang tidak bisa dihubungi saat
@@ -430,3 +443,28 @@ Catatan penting:
 - Log & backup: `$BASE_DIR/nperf/install-nperf.log`,
   `$BASE_DIR/nperf/backup/nperf-server.conf.bak`, state:
   `$BASE_DIR/nperf/.nperf-state`.
+
+---
+
+## 13. Keamanan & Integritas (hardening v8.2.1)
+
+| Mekanisme | Cara kerja |
+|---|---|
+| **Config tanpa eksekusi** | `speedtest-repo.conf` **tidak** lagi di-`source` (dulu setiap barisnya dieksekusi sebagai root). Kini dibaca sebagai `KEY=VALUE` oleh `load_repo_conf()`; nama kunci dibatasi `A-Za-z0-9_` dan nama berbahaya (`PATH`, `IFS`, `LD_*`, `BASH_*`, …) dilewati. Mendukung komentar inline & nilai berkutip. |
+| **Verifikasi checksum menyeluruh** | `install.sh` memverifikasi **seluruh** file terkelola terhadap `checksums.sha256` di akhir instalasi; self-update memverifikasinya lagi pasca-update; `speedtestctl verify` (atau `install.sh --verify-only`) bisa dipanggil kapan saja — tanpa menyentuh sistem dan tanpa perlu internet. |
+| **Pin hash pihak ketiga** | Tarball CLI Ookla dan biner statis ZeroTier diverifikasi SHA-256 **sebelum** dipasang/dijalankan. Bila hash untuk arsitektur tidak tersedia, pemasangan **ditolak** (kecuali `*_ALLOW_UNVERIFIED="Ya"`). |
+| **Backup di lokasi baku** | Backup drop-in sshd saat uninstall disimpan di `/var/backups/speedtest-sshd-dropin.conf.bak` (bukan `/tmp` yang bisa dibersihkan sistem). |
+| **Firewall** | Rule port dibuka pada firewall yang **aktif** (ufw *atau* firewalld) — tidak lagi menebak dari keberadaan biner. |
+| **Tidak ada flush iptables** | NAT ZeroTier hanya memakai `-C`/`-A` (verify/append) sehingga tidak pernah menghapus rule milik layanan lain (termasuk redirect nftables nPerf). |
+| **Repo nPerf terverifikasi** | `signed-by` untuk semua codename + pin fingerprint kunci (`NPERF_GPG_FINGERPRINT`) — kunci asing ditolak sebelum repo ditulis. |
+
+```bash
+bash $BASE_DIR/install.sh --verify-only    # verifikasi integritas (rc 0 = OK, 1 = ada yang tidak cocok)
+bash $BASE_DIR/speedtestctl.sh verify      # sama, lewat tool management
+```
+
+> Catatan tentang pin hash: hash bawaan dihitung dari unduhan resmi saat rilis
+> ini dibuat (TOFU). Ia melindungi dari perubahan tak terduga pada berkas di
+> CDN/repo pihak ketiga **setelah** rilis; ia bukan pengganti verifikasi tanda
+> tangan vendor. Bila vendor merilis versi baru, perbarui pin lewat
+> `OOKLA_CLI_SHA256` / `ZT_BIN_SHA256` di `speedtest-repo.conf`.

@@ -101,6 +101,17 @@ NPERF_TMPFS_SIZE="${NPERF_TMPFS_SIZE:-1200M}"
 # Ukuran berkas uji (MiB) untuk mode ramdisk — default mengikuti panduan nPerf
 # (10/100/1024). Bisa diperkecil bila RAM/disk terbatas.
 NPERF_HTTP_FILES_MIB="${NPERF_HTTP_FILES_MIB:-10 100 1024}"
+# Direktori berkas HTTP (mode ramdisk). Bila web server eksternal (nginx/apache)
+# dipasang, ubah ke docroot-nya — mis. NPERF_HTTP_FILES_DIR="/var/www/html/nperf".
+NPERF_HTTP_FILES_DIR="${NPERF_HTTP_FILES_DIR:-/var/www/html/nperf}"
+# Kebijakan repo APT nPerf:
+#   - NPERF_APT_TRUSTED="Ya"       → pakai [trusted=yes] (TANPA verifikasi tanda
+#     tangan apt). HANYA untuk keadaan darurat bila apt menolak repo nPerf.
+#   - NPERF_GPG_FINGERPRINT        → fingerprint kunci repo nPerf yang diharapkan
+#     (kosong = lewati pemeriksaan fingerprint). Default = fingerprint resmi nPerf
+#     (54BA36ED…60AE1B3C) yang memverifikasi InRelease trixie & bookworm.
+NPERF_APT_TRUSTED="${NPERF_APT_TRUSTED:-Tidak}"
+NPERF_GPG_FINGERPRINT="${NPERF_GPG_FINGERPRINT:-54BA36EDD7BB1106CE727D96351C6BB560AE1B3C}"
 
 NPERF_CONF="/etc/nperf/nperf-server.conf"
 NPERF_UUID_DIR="/var/lib/nperf-server"
@@ -182,18 +193,22 @@ nperf_repo_add_deb() {
     return 1
   fi
 
-  # Baris repo. Debian 13 (trixie) direkomendasikan memakai trusted=yes
-  # (kunci repo dirotasi; mengikuti instruksi resmi nPerf untuk trixie).
-  case "$codename" in
-    trixie) line="deb [arch=amd64 trusted=yes] $base $codename main" ;;
-    *)      line="deb [arch=amd64 signed-by=$keydir/nperf.asc] $base $codename main" ;;
-  esac
+  # Baris repo. DEFAULT: signed-by untuk SEMUA codename (verifikasi tanda tangan
+  # apt aktif). Diverifikasi ulang terhadap repo nPerf: InRelease untuk
+  # bookworm & trixie ditandatangani kunci resmi nPerf (fingerprint
+  # 54BA36ED…60AE1B3C) sehingga trusted=yes TIDAK diperlukan — dan justru
+  # melemahkan keamanan (mematikan verifikasi tanda tangan).
+  if [ "$NPERF_APT_TRUSTED" = "Ya" ]; then
+    line="deb [arch=amd64 trusted=yes] $base $codename main"
+  else
+    line="deb [arch=amd64 signed-by=$keydir/nperf.asc] $base $codename main"
+  fi
 
   # Sudah benar (termasuk kunci untuk mode signed-by) → keluar TANPA jaringan.
   # Idempotent & hemat; dipanggil juga setiap kali paket sudah terpasang untuk
   # memastikan repo tidak hilang / kunci tidak terhapus.
   key_needed=1
-  case "$codename" in trixie) key_needed=0 ;; esac
+  [ "$NPERF_APT_TRUSTED" = "Ya" ] && key_needed=0
   if [ -f "$listfile" ] && [ "$(cat "$listfile" 2>/dev/null)" = "$line" ] \
      && { [ "$key_needed" -eq 0 ] || [ -s "$keydir/nperf.asc" ]; }; then
     log_info "Repo nPerf (deb) sudah benar — tidak diubah."
@@ -226,6 +241,30 @@ nperf_repo_add_deb() {
   fi
   rm -f "$tmpkey" 2>/dev/null || true
   chmod 644 "$keydir/nperf.asc" 2>/dev/null || true
+
+  # ── Pin fingerprint kunci (mencegah kunci pihak lain disisipkan) ───────────
+  # Bila gpg tersedia dan fingerprint terbaca, nilainya WAJIB sama dengan
+  # NPERF_GPG_FINGERPRINT. Perbedaan = kunci asing → repo dibatalkan.
+  if command_exists gpg && [ -s "$keydir/nperf.asc" ]; then
+    local fp=""
+    fp="$(gpg --show-keys --with-colons "$keydir/nperf.asc" 2>/dev/null \
+          | awk -F: '$1=="fpr" {print $10; exit}')"
+    if [ -z "$fp" ]; then
+      fp="$(gpg --with-colons --import-options show-only --import "$keydir/nperf.asc" 2>/dev/null \
+            | awk -F: '$1=="fpr" {print $10; exit}')"
+    fi
+    if [ -n "$fp" ] && [ -n "$NPERF_GPG_FINGERPRINT" ] && [ "$fp" != "$NPERF_GPG_FINGERPRINT" ]; then
+      log_error "Fingerprint kunci repo nPerf TIDAK cocok (diharap ${NPERF_GPG_FINGERPRINT}, dapat ${fp}) — repo dibatalkan."
+      rm -f "$keydir/nperf.asc" 2>/dev/null || true
+      return 1
+    fi
+    if [ -n "$fp" ]; then
+      nperf_log "kunci repo nPerf terverifikasi (fingerprint $fp)"
+      log_ok "Kunci repo nPerf terverifikasi (fingerprint: ${fp:0:8}…)."
+    else
+      log_warn "Fingerprint kunci repo nPerf tidak bisa dibaca (format kunci tak dikenal) — lanjut tanpa pin."
+    fi
+  fi
 
   mkdir -p "$NPERF_BACKUP_DIR" 2>/dev/null || true
   [ -f "$listfile" ] && cp -f "$listfile" "$NPERF_BACKUP_DIR/nperf.list.bak" 2>/dev/null || true
@@ -329,13 +368,14 @@ nperf_conf_apply() {
 # ── Opsional: ramdisk 1,2 GB + berkas HTTP (pola resmi nPerf) ────────────────
 nperf_tmpfs_setup() {
   [ "$NPERF_HTTP_FILES_TMPFS" = "Ya" ] || return 0
-  log_info "Menyiapkan ramdisk nPerf ($NPERF_TMPFS_SIZE) di /var/www/html/nperf ..."
-  mkdir -p /var/www/html/nperf "$NPERF_DIR/http-files" 2>/dev/null || true
-  if command_exists mountpoint && mountpoint -q /var/www/html/nperf 2>/dev/null; then
-    log_info "Ramdisk /var/www/html/nperf sudah ter-mount."
+  local hdir="$NPERF_HTTP_FILES_DIR"
+  log_info "Menyiapkan ramdisk nPerf ($NPERF_TMPFS_SIZE) di $hdir ..."
+  mkdir -p "$hdir" "$NPERF_DIR/http-files" 2>/dev/null || true
+  if command_exists mountpoint && mountpoint -q "$hdir" 2>/dev/null; then
+    log_info "Ramdisk $hdir sudah ter-mount."
   else
-    mount -t tmpfs -o "defaults,size=${NPERF_TMPFS_SIZE}" tmpfs /var/www/html/nperf 2>/dev/null \
-      || log_warn "Gagal me-mount tmpfs di /var/www/html/nperf (lanjut tanpa ramdisk)."
+    mount -t tmpfs -o "defaults,size=${NPERF_TMPFS_SIZE}" tmpfs "$hdir" 2>/dev/null \
+      || log_warn "Gagal me-mount tmpfs di $hdir (lanjut tanpa ramdisk)."
   fi
   # Berkas wajib (unduh upload.php resmi; sisanya dibuat lokal).
   if command_exists curl; then
@@ -349,11 +389,18 @@ nperf_tmpfs_setup() {
     [ -s "$NPERF_DIR/http-files/${sz}MiB.dat" ] || \
       head -c "$((sz * 1024 * 1024))" /dev/urandom > "$NPERF_DIR/http-files/${sz}MiB.dat" 2>/dev/null || true
   done
-  cp -pu "$NPERF_DIR"/http-files/* /var/www/html/nperf/ 2>/dev/null || true
+  # Direktori tujuan harus ada SEBELUM cp (tmpfs baru ter-mount; bila mount
+  # gagal, direktori tetap dibuat agar berkas tidak hilang tanpa jejak).
+  mkdir -p "$hdir" 2>/dev/null || true
+  if [ -d "$hdir" ]; then
+    cp -pu "$NPERF_DIR"/http-files/* "$hdir"/ 2>/dev/null || true
+  else
+    log_warn "Direktori $hdir tidak bisa dibuat — berkas HTTP tidak disalin."
+  fi
   # Salin ulang saat reboot (ramdisk bersifat volatil) — pakai path absolut.
   if command_exists cron_apply; then
     cron_apply "# nperf-ramdisk (managed)" \
-      "@reboot /bin/cp -pu $NPERF_DIR/http-files/* /var/www/html/nperf/ >/dev/null 2>&1" || true
+      "@reboot /bin/mkdir -p $hdir && /bin/cp -pu $NPERF_DIR/http-files/* $hdir/ >/dev/null 2>&1" || true
   fi
   log_ok "Ramdisk nPerf siap ($NPERF_TMPFS_SIZE)."
   nperf_log "ramdisk tmpfs aktif"
@@ -494,8 +541,13 @@ nperf_status_print() {
   printf '  status     : %s\n' "$(nperf_pkg_installed && echo "paket terpasang (versi ${ver:-?})" || echo 'paket TIDAK terpasang')"
   printf '  port HTTP  : %s\n' "$NPERF_HTTP_PORT"
   printf '  port TLS   : %s\n' "$NPERF_TLS_PORT"
+  printf '  berkas HTTP: %s (ramdisk: %s)\n' "$NPERF_HTTP_FILES_DIR" "$NPERF_HTTP_FILES_TMPFS"
   printf '  redirect   : 80→%s (%s), 443→%s (%s)\n' "$NPERF_HTTP_PORT" "$NPERF_REDIRECT_80" "$NPERF_TLS_PORT" "$NPERF_REDIRECT_443"
-  printf '  UUID       : %s\n' "$([ -s "$NPERF_UUID_FILE" ] && cut -c1-8 "$NPERF_UUID_FILE" || echo '(belum ada)')…"
+  if [ -s "$NPERF_UUID_FILE" ]; then
+    printf '  UUID       : %s…\n' "$(cut -c1-8 "$NPERF_UUID_FILE" 2>/dev/null)"
+  else
+    printf '  UUID       : (belum ada — dibuat daemon saat pertama jalan)\n'
+  fi
   if [ -n "$NFT_BIN" ]; then
     printf '  nftables   : %s rule nPerfServer\n' "$("$NFT_BIN" list ruleset 2>/dev/null | grep -c 'nPerfServer' || echo 0)"
   fi
@@ -526,6 +578,8 @@ main() {
 
   mkdir -p "$NPERF_DIR" "$NPERF_BACKUP_DIR" 2>/dev/null || true
   nperf_log "=== bagian12 mulai (mode=$MODE) ==="
+  # Menandai bila repo resmi gagal/ditolak (dipakai untuk pesan penutup).
+  local repo_skipped=0
 
   # Peringatan bentrok port dengan OoklaServer (bila operator mengubah default).
   if command_exists ookla_props_ports && [ -n "${OOKLA_PROPERTIES:-}" ]; then
@@ -555,8 +609,8 @@ main() {
     # Repo resmi tetap dipastikan ada (mis. berkas repo terhapus manual) agar
     # pembaruan paket nPerf tetap mengalir. Tanpa jaringan bila sudah benar.
     case "${OS_FAMILY:-unknown}" in
-      debian)     nperf_repo_add_deb || true ;;
-      rhel|suse)  nperf_repo_add_rpm || true ;;
+      debian)     nperf_repo_add_deb || repo_skipped=1 ;;
+      rhel|suse)  nperf_repo_add_rpm || repo_skipped=1 ;;
     esac
   fi
 
@@ -567,6 +621,11 @@ main() {
     nperf_tmpfs_setup
     nperf_service_apply "$ch"
     nperf_state_write
+    if [ "${repo_skipped:-0}" = "1" ]; then
+      log_warn "Repo resmi nPerf TIDAK terpasang (kunci ditolak / repo tak terjangkau)."
+      log_warn "Pembaruan paket nPerf via apt tidak akan mengalir sampai ini diperbaiki."
+      nperf_log "peringatan: repo resmi nPerf tidak terpasang (mode config)"
+    fi
     log_ok "Penegakan konfigurasi nPerf selesai (mode --config-only)."
     return 0
   fi
@@ -581,6 +640,14 @@ main() {
   log_info "Verifikasi nPerf:"
   nperf_verify || true
   nperf_state_write
+
+  if [ "${repo_skipped:-0}" = "1" ]; then
+    log_warn "Repo resmi nPerf TIDAK terpasang — pembaruan paket nPerf tidak akan"
+    log_warn "mengalir otomatis. Penyebab umum: pin NPERF_GPG_FINGERPRINT tidak cocok"
+    log_warn "(kunci repo berubah?) atau repo nPerf tidak terjangkau."
+    log_warn "Perbaiki lalu jalankan ulang: bash $BASE_DIR/bagian12_nperf_server.sh"
+    nperf_log "peringatan: repo resmi nPerf tidak terpasang (mode install)"
+  fi
 
   log_ok "Bagian 12 selesai — nPerf Server aktif (HTTP ${NPERF_HTTP_PORT}, TLS ${NPERF_TLS_PORT})."
   log_info "Validasi server di port standar: https://server-check.nperf.com/"

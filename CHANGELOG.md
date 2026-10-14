@@ -1,3 +1,74 @@
+## v8.2.1 — Hardening hasil audit keamanan & ketahanan (tanpa perubahan perilaku instalasi)
+
+Audit mandiri (leak/bug/risiko) menemukan & memperbaiki 12 hal berikut.
+
+**Keamanan**
+1. **(PENTING) `speedtest-repo.conf` tidak lagi dieksekusi sebagai shell.** Sebelumnya
+   file ini di-`source` sehingga setiap barisnya berjalan sebagai root. Kini dibaca
+   sebagai `KEY=VALUE` (`load_repo_conf()`): komentar inline didukung, nama kunci
+   dibatasi, dan nama berbahaya (`PATH`/`IFS`/`LD_*`/`BASH_*`) dilewati.
+2. **Kredensial Cloudflare LAMA masih dapat diunduh publik** dari `autocertbot.sh`
+   pada riwayat commit repo GitHub → **WAJIB rotasi** (operasional, di luar kode).
+   Kredensial tidak pernah dicetak ke log (hanya `mask_secret`), sudahlah demikian.
+3. **Verifikasi checksum menyeluruh**: `install.sh` memverifikasi semua file
+   terkelola di akhir instalasi, self-update memverifikasi pasca-update, dan ada
+   mode baru `install.sh --verify-only` (+ `speedtestctl verify`) yang murni
+   memeriksa tanpa menyentuh sistem/internet.
+4. **Pin SHA-256 untuk biner pihak ketiga**: tarball CLI Ookla (per arsitektur)
+   dan biner statis ZeroTier diverifikasi sebelum dipasang; bila hash tidak
+   tersedia untuk arsitektur tersebut, pemasangan **ditolak** (kecuali
+   `OOKLA_CLI_ALLOW_UNVERIFIED` / `ZT_ALLOW_UNPINNED_BINARY` = `"Ya"`).
+5. **Backup drop-in sshd** saat uninstall dipindah dari `/tmp` ke
+   `/var/backups/speedtest-sshd-dropin.conf.bak` (tidak lagi bisa dihapus/
+   ditempel proses lain).
+
+**Bug & ketahanan**
+6. **(PENTING) `speedtest-repo.conf` diabaikan oleh self-update.** `au_load_repo_config()`
+   tidak mengenali kunci `NPERF_*` sehingga perubahan `NPERF_ENABLED`/port nPerf
+   **tidak pernah** terbaca lewat `speedtest-selfupdate.sh` (unit/systemd berbeda
+   jalur). Kini loader mengenali seluruh 52 kunci conf, dan `tools/audit_cmd_deps.py`
+   menegakkannya otomatis (parity check) agar bug kelas ini tidak terulang.
+7. Parser nilai conf kini **satu implementasi** (common ↔ auto_update_lib) —
+   menghapus risiko dua semantik berbeda untuk komentar/kutip.
+8. `speedtestctl nperf-restart` tidak lagi gagal tanpa pesan bila systemd &
+   init.d sama-sama tidak ada; pesan jelas + saran perintah.
+9. Firewall: rule port dibuka pada backend yang **aktif** (ufw/firewalld), bukan
+   berdasarkan keberadaan biner saja.
+10. `install.log` dirotasi otomatis saat installer dimulai (dulu tumbuh tanpa
+    batas di server produksi).
+11. `install.sh --help` bisa dibaca tanpa root (pemeriksaan root dipindah setelah
+    parsing argumen).
+12. nPerf mode ramdisk: direktori tujuan dibuat sebelum penyalinan, path-nya
+    konfigurable (`NPERF_HTTP_FILES_DIR`), dan status menampilkan UUID/berkas HTTP
+    dengan benar.
+13. **(PENTING) repo APT nPerf tidak lagi memakai `trusted=yes`.** Diverifikasi
+    langsung: `InRelease` bookworm **dan** trixie ditandatangani kunci resmi nPerf
+    (`54BA36ED…60AE1B3C`), jadi verifikasi tanda tangan apt kini **aktif**
+    (`signed-by`) untuk semua codename. Efek samping: instalasi nPerf di Debian 13
+    tidak lagi menonaktifkan verifikasi paket. Jalur darurat tetap ada lewat
+    `NPERF_APT_TRUSTED="Ya"`.
+14. **Pin fingerprint kunci repo nPerf** (`NPERF_GPG_FINGERPRINT`): kunci yang
+    disajikan dengan fingerprint berbeda ditolak sebelum repo ditulis — menutup
+    celah serangan "ganti kunci + repo sendiri" bila jalur unduhan dikuasai pihak
+    lain. Uji E2E: kunci asing ditolak, kunci dengan fingerprint benar diterima.
+15. **Substitusi placeholder tahan karakter khusus.** 10 titik `sed -i "s|__X__|$VAR|"`
+    di `bagian8`/`bagian4` kini memakai helper `sed_escape_repl()`: nilai berisi `&`
+    (backreference) atau `|` (delimiter) tidak lagi merusak file hasil generate —
+    bug senyap yang baru muncul bila path sistem memuat karakter tersebut.
+16. **Ringkasan nPerf menyebut bila repo resmi tidak terpasang.** Kegagalan repo
+    nPerf tetap DEFERRABLE (instalasi utama jalan terus), tetapi kini ditutup dengan
+    peringatan eksplisit di mode install maupun `--config-only` (self-update), jadi
+    operator tahu pembaruan paket nPerf sedang tidak mengalir — mis. saat kunci repo
+    ditolak oleh pin `NPERF_GPG_FINGERPRINT`.
+17. **Bersih-bersih kode mati.** Fungsi `die()` yang tak pernah dipakai di blok
+    fallback `bagian7_network.sh` dihapus (temuan ShellCheck SC2329), sehingga
+    ShellCheck kini **0 temuan untuk seluruh 22 skrip** repo.
+
+**Perubahan yang diverifikasi ulang:** E2E harness (mock namespace) `241 PASS / 0
+FAIL` (run21),
+audit dependensi + 4 gerbang baru (parity conf, no-`source` conf, gerbang
+integritas, pin hash) PASS, ShellCheck 0 temuan.
+
 ## v8.2.0 — nPerf Server (layanan speedtest kedua)
 
 Fitur baru: **nPerf Server** (`nperf-server` resmi dari `repository.nperf.com`)

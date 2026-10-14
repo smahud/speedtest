@@ -26,6 +26,30 @@ log_info "== Bagian 1: Speedtest CLI & kredensial Cloudflare =="
 OOKLA_CLI_VERSION="1.2.0"
 OOKLA_CLI_DIR="/usr/local/bin"
 
+# ── PIN SHA-256 tarball CLI Ookla (integritas; hardening v8.2.1) ─────────────
+# Nilai dihitung dari unduhan resmi install.speedtest.net untuk versi di atas.
+# Override: OOKLA_CLI_SHA256 di speedtest-repo.conf (mis. saat naik versi).
+# Bila hash untuk arsitektur tidak dikenal → pemasangan biner DITOLAK kecuali
+# OOKLA_CLI_ALLOW_UNVERIFIED="Ya".
+OOKLA_CLI_SHA256="${OOKLA_CLI_SHA256:-}"
+OOKLA_CLI_ALLOW_UNVERIFIED="${OOKLA_CLI_ALLOW_UNVERIFIED:-Tidak}"
+OOKLA_CLI_SHA256_X86_64="5690596c54ff9bed63fa3732f818a05dbc2db19ad36ed68f21ca5f64d5cfeeb7"
+OOKLA_CLI_SHA256_AARCH64="3953d231da3783e2bf8904b6dd72767c5c6e533e163d3742fd0437affa431bd3"
+OOKLA_CLI_SHA256_ARMHF="e45fcdebbd8a185553535533dd032d6b10bc8c64eee4139b1147b9c09835d08d"
+OOKLA_CLI_SHA256_I386="9ff7e18dbae7ee0e03c66108445a2fb6ceea6c86f66482e1392f55881b772fe8"
+
+ookla_cli_expected_sha256() {
+  local arch="$1"
+  if [ -n "$OOKLA_CLI_SHA256" ]; then printf '%s' "$OOKLA_CLI_SHA256"; return 0; fi
+  case "$arch" in
+    x86_64)  printf '%s' "$OOKLA_CLI_SHA256_X86_64" ;;
+    aarch64) printf '%s' "$OOKLA_CLI_SHA256_AARCH64" ;;
+    armhf)   printf '%s' "$OOKLA_CLI_SHA256_ARMHF" ;;
+    i386)    printf '%s' "$OOKLA_CLI_SHA256_I386" ;;
+    *)       printf '' ;;
+  esac
+}
+
 # ── Apakah 'speedtest' yang ada benar-benar CLI resmi Ookla? ──────────────────
 speedtest_is_ookla() {
   command_exists speedtest || return 1
@@ -58,6 +82,37 @@ install_ookla_binary() {
   else
     log_error "curl/wget tidak tersedia untuk mengunduh Speedtest CLI."
     return 1
+  fi
+
+  # ── Verifikasi SHA-256 tarball SEBELUM diekstrak (mencegah eksekusi biner
+  #    yang korrupt/ditukar). Gagal verifikasi = tolak, bukan hanya peringatan.
+  local want_sum got_sum
+  want_sum="$(ookla_cli_expected_sha256 "$arch")"
+  got_sum=""
+  if command -v sha256_of_file >/dev/null 2>&1; then
+    got_sum="$(sha256_of_file "$tgz")"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    got_sum="$(sha256sum "$tgz" 2>/dev/null | awk '{print $1}')"
+  elif command -v openssl >/dev/null 2>&1; then
+    got_sum="$(openssl dgst -sha256 "$tgz" 2>/dev/null | awk '{print $NF}')"
+  fi
+  if [ -z "$want_sum" ]; then
+    if [ "$OOKLA_CLI_ALLOW_UNVERIFIED" != "Ya" ]; then
+      log_error "PIN hash CLI Ookla untuk arsitektur '$arch' belum tersedia —"
+      log_error "biner TIDAK dipasang. Set OOKLA_CLI_SHA256 (hash resmi) atau"
+      log_error "OOKLA_CLI_ALLOW_UNVERIFIED=\"Ya\" di speedtest-repo.conf bila setuju."
+      rm -f "$tgz"
+      return 1
+    fi
+    log_warn "PIN hash CLI Ookla tidak tersedia & verifikasi diizinkan dilewati (OOKLA_CLI_ALLOW_UNVERIFIED=Ya)."
+  elif [ -z "$got_sum" ]; then
+    log_warn "Tidak ada tool SHA-256 untuk memverifikasi tarball CLI Ookla — dilewati."
+  elif [ "$want_sum" != "$got_sum" ]; then
+    log_error "SHA-256 tarball CLI Ookla TIDAK cocok (diharap ${want_sum:0:12}…, dapat ${got_sum:0:12}…) — dibatalkan."
+    rm -f "$tgz"
+    return 1
+  else
+    log_ok "SHA-256 tarball CLI Ookla terverifikasi (${got_sum:0:12}…)."
   fi
 
   tar -xzf "$tgz" -C "$TMP_DIR" speedtest 2>/dev/null || tar -xzf "$tgz" -C "$TMP_DIR" 2>/dev/null || {

@@ -64,6 +64,7 @@ usage() {
   echo "  nperf-status  - Status nPerf Server (layanan speedtest kedua)"
   echo "  nperf-restart - Restart service nPerf"
   echo "  nperf-logs    - Tampilkan log instalasi nPerf"
+  echo "  verify        - Verifikasi integritas semua file (checksums.sha256)"
   echo "  uninstall   - Hapus service OoklaServer"
 }
 
@@ -114,6 +115,15 @@ case "${1:-}" in
       exit 1
     fi
     ;;
+  verify)
+    # Verifikasi integritas file terkelola tanpa menyentuh sistem.
+    if [ -f "$BASE_DIR/install.sh" ]; then
+      bash "$BASE_DIR/install.sh" --verify-only
+    else
+      echo "install.sh tidak ada di $BASE_DIR."
+      exit 1
+    fi
+    ;;
   nperf-status|nperf-restart|nperf-logs)
     if [ ! -x "$BASE_DIR/bagian12_nperf_server.sh" ]; then
       echo "Modul nPerf tidak ada ($BASE_DIR/bagian12_nperf_server.sh)."
@@ -124,8 +134,12 @@ case "${1:-}" in
       nperf-restart)
         if command -v systemctl >/dev/null 2>&1; then
           systemctl restart nperf-server && echo "nPerf direstart."
+        elif [ -x /etc/init.d/nperf-server ]; then
+          /etc/init.d/nperf-server restart && echo "nPerf direstart (init.d)."
         else
-          /etc/init.d/nperf-server restart
+          echo "Service nPerf tidak ditemukan (systemd & init.d tidak ada)."
+          echo "Pasang/tegakkan ulang: bash $BASE_DIR/bagian12_nperf_server.sh"
+          exit 1
         fi
         ;;
       nperf-logs)
@@ -156,14 +170,14 @@ esac
 CTLEOF
 
   # Substitusi placeholder
-  sed -i "s|__STATE_FILE__|$STATE_FILE|" "$BASE_DIR/speedtestctl.sh"
-  sed -i "s|__OOKLA_SCRIPT__|$OOKLA_SCRIPT|" "$BASE_DIR/speedtestctl.sh"
-  sed -i "s|__BASE_DIR__|$BASE_DIR|" "$BASE_DIR/speedtestctl.sh"
-  sed -i "s|__OOKLA_BIN__|$OOKLA_BIN|" "$BASE_DIR/speedtestctl.sh"
-  sed -i "s|__INIT_SYSTEM__|$INIT_SYSTEM|" "$BASE_DIR/speedtestctl.sh"
-  sed -i "s|__CRON_PATH__|$CRON_PATH_RESOLVED|" "$BASE_DIR/speedtestctl.sh"
-  sed -i "s|__REPORT_LOG__|$REPORT_LOG|" "$BASE_DIR/speedtestctl.sh"
-  sed -i "s|__OOKLA_PROPERTIES__|$OOKLA_PROPERTIES|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__STATE_FILE__|$(sed_escape_repl "${STATE_FILE}")|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__OOKLA_SCRIPT__|$(sed_escape_repl "${OOKLA_SCRIPT}")|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__BASE_DIR__|$(sed_escape_repl "${BASE_DIR}")|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__OOKLA_BIN__|$(sed_escape_repl "${OOKLA_BIN}")|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__INIT_SYSTEM__|$(sed_escape_repl "${INIT_SYSTEM}")|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__CRON_PATH__|$(sed_escape_repl "${CRON_PATH_RESOLVED}")|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__REPORT_LOG__|$(sed_escape_repl "${REPORT_LOG}")|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__OOKLA_PROPERTIES__|$(sed_escape_repl "${OOKLA_PROPERTIES}")|" "$BASE_DIR/speedtestctl.sh"
   chmod a+x "$BASE_DIR/speedtestctl.sh"
   log_ok "Tool management siap: $BASE_DIR/speedtestctl.sh (start|stop|restart|status|report|logs|report-log|nperf-status|nperf-restart|nperf-logs)"
 }

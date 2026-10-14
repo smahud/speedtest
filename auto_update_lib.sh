@@ -63,6 +63,12 @@ au_chmod_private() { chmod 700 "$1" 2>/dev/null || true; }
 # BUG yang pernah terjadi: tanpa pembersihan komentar inline, nilai menjadi
 # '5"  # komentar' → error aritmetika / user SSH tidak ditemukan.
 au_parse_value() {
+  # Bila common_functions1.sh sudah dimuat, pakai implementasinya agar hanya
+  # ada SATU semantik parsing di seluruh repo.
+  if command -v repo_conf_parse_value >/dev/null 2>&1; then
+    repo_conf_parse_value "$1"
+    return 0
+  fi
   local v="$1"
   # buang spasi/tab di depan
   while :; do
@@ -108,6 +114,13 @@ au_load_repo_config() {
   REPORT_JITTER_MIN_MAX=""
   SPEEDTEST_CLI_PATH=""; SPEEDTEST_CLI_LICENSE_FLAGS=""; SPEEDTEST_SMOKE_TEST=""; SPEEDTEST_SMOKE_TIMEOUT=""
   CRON_PATH=""; TLS_VERIFY_ENABLED=""; TLS_VERIFY_STRICT=""; CERT_MIN_VALID_DAYS=""
+  NPERF_ENABLED=""; NPERF_HTTP_PORT=""; NPERF_TLS_PORT=""
+  NPERF_REDIRECT_80=""; NPERF_REDIRECT_443=""; NPERF_AUTOSTART=""
+  NPERF_HTTP_FILES_TMPFS=""; NPERF_TMPFS_SIZE=""
+  NPERF_HTTP_FILES_DIR=""; NPERF_HTTP_FILES_MIB=""
+  NPERF_APT_TRUSTED=""; NPERF_GPG_FINGERPRINT=""
+  OOKLA_CLI_SHA256=""; OOKLA_CLI_ALLOW_UNVERIFIED=""
+  ZT_BIN_SHA256=""; ZT_ALLOW_UNPINNED_BINARY=""
 
   f="$dir/speedtest-repo.conf"
   if [ -f "$f" ]; then
@@ -119,7 +132,13 @@ au_load_repo_config() {
       key="${line%%=*}"
       val="${line#*=}"
       case "$key" in *[!A-Za-z0-9_]*) continue ;; esac
-      val="$(au_parse_value "$val")"
+      # Satu implementasi parsing (common_functions1.sh) agar semantik sama
+      # dengan jalur "source dini" di common; fallback ke au_parse_value.
+      if command -v repo_conf_parse_value >/dev/null 2>&1; then
+        val="$(repo_conf_parse_value "$val")"
+      else
+        val="$(au_parse_value "$val")"
+      fi
       case "$key" in
         REPO_RAW_BASE_DEFAULT) REPO_RAW_BASE_DEFAULT="$val" ;;
         ZT_NETWORK_ID) ZT_NETWORK_ID="$val" ;;
@@ -158,6 +177,22 @@ au_load_repo_config() {
         CRON_PATH) CRON_PATH="$val" ;;
         TLS_VERIFY_ENABLED) TLS_VERIFY_ENABLED="$val" ;;
         TLS_VERIFY_STRICT) TLS_VERIFY_STRICT="$val" ;;
+        NPERF_ENABLED) NPERF_ENABLED="$val" ;;
+        NPERF_HTTP_PORT) NPERF_HTTP_PORT="$val" ;;
+        NPERF_TLS_PORT) NPERF_TLS_PORT="$val" ;;
+        NPERF_REDIRECT_80) NPERF_REDIRECT_80="$val" ;;
+        NPERF_REDIRECT_443) NPERF_REDIRECT_443="$val" ;;
+        NPERF_AUTOSTART) NPERF_AUTOSTART="$val" ;;
+        NPERF_HTTP_FILES_TMPFS) NPERF_HTTP_FILES_TMPFS="$val" ;;
+        NPERF_TMPFS_SIZE) NPERF_TMPFS_SIZE="$val" ;;
+        NPERF_HTTP_FILES_DIR) NPERF_HTTP_FILES_DIR="$val" ;;
+        NPERF_HTTP_FILES_MIB) NPERF_HTTP_FILES_MIB="$val" ;;
+        NPERF_APT_TRUSTED) NPERF_APT_TRUSTED="$val" ;;
+        NPERF_GPG_FINGERPRINT) NPERF_GPG_FINGERPRINT="$val" ;;
+        OOKLA_CLI_SHA256) OOKLA_CLI_SHA256="$val" ;;
+        OOKLA_CLI_ALLOW_UNVERIFIED) OOKLA_CLI_ALLOW_UNVERIFIED="$val" ;;
+        ZT_BIN_SHA256) ZT_BIN_SHA256="$val" ;;
+        ZT_ALLOW_UNPINNED_BINARY) ZT_ALLOW_UNPINNED_BINARY="$val" ;;
         CERT_MIN_VALID_DAYS) CERT_MIN_VALID_DAYS="$val" ;;
       esac
     done < "$f"
@@ -205,6 +240,11 @@ au_load_repo_config() {
   if [ -z "$TLS_VERIFY_STRICT" ]; then TLS_VERIFY_STRICT="Tidak"; fi
   if [ -z "$CERT_MIN_VALID_DAYS" ]; then CERT_MIN_VALID_DAYS="10"; fi
 
+  export NPERF_ENABLED NPERF_HTTP_PORT NPERF_TLS_PORT NPERF_REDIRECT_80 NPERF_REDIRECT_443 \
+         NPERF_AUTOSTART NPERF_HTTP_FILES_TMPFS NPERF_TMPFS_SIZE NPERF_HTTP_FILES_DIR \
+         NPERF_HTTP_FILES_MIB NPERF_APT_TRUSTED NPERF_GPG_FINGERPRINT \
+         OOKLA_CLI_SHA256 OOKLA_CLI_ALLOW_UNVERIFIED \
+         ZT_BIN_SHA256 ZT_ALLOW_UNPINNED_BINARY
   export REPO_RAW_BASE_DEFAULT ZT_NETWORK_ID ZT_MOON_ID ZT_MOON_CONFIG_URL \
          ZT_ENABLE_EXIT_NODE ZT_REQUIRE_AUTHORIZATION ZT_AUTH_TIMEOUT ZT_INSTALL_IF_MISSING \
          HOSTS_MANAGED HOSTS_FILE HOSTS_TARGET_IP HOSTS_MARKER \

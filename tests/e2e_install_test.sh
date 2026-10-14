@@ -481,6 +481,9 @@ check "file bagian0 ikut ter-update"          'grep -q "UPDATED-99.0.0" "'"$WORK
 BACKUP_COUNT="$(ls -1 "$WORK/base/.backups" 2>/dev/null | wc -l)"
 check "backup versi lama dibuat"              '[ "${BACKUP_COUNT:-0}" -ge 1 ]'
 check "update.log dibuat"                     '[ -f "'"$WORK"'/base/update.log" ]'
+# Salinan untuk pemeriksaan integritas pasca-update (base/update.log dihapus
+# oleh uji uninstall, sedangkan pemeriksaannya di seksi 21).
+cp -f "$WORK/base/update.log" "$WORK/selfupdate.pasca.log" 2>/dev/null || true
 # shellcheck disable=SC2034  # dipakai di dalam string check "..."
 HOSTS_AFTER_UPDATE="$(grep -c "speedtest-managed" "$WORK/etc/hosts" 2>/dev/null || echo 0)"
 check "hosts tetap konsisten setelah update"  '[ "$HOSTS_AFTER_UPDATE" -ge 1 ]'
@@ -1362,10 +1365,93 @@ check "--status menyebut paket terpasang"              'grep -q "paket terpasang
 printf 'ID=debian\nID_LIKE=debian\nVERSION_ID="13"\nVERSION_CODENAME=trixie\n' > "$WORK/etc/os-release"
 rm -f "$WORK/etc/apt/sources.list.d/nperf.list"
 ns_run_nperf 'timeout 120 bash ./bagian12_nperf_server.sh ./data.ini > "$WORK/nperf4b.out" 2>&1; exit 0'
-NPTRIXIE_A="$(grep -cF "trusted=yes" "$WORK/etc/apt/sources.list.d/nperf.list" 2>/dev/null || true)"
-NPTRIXIE_B="$(grep -cF "trixie main" "$WORK/etc/apt/sources.list.d/nperf.list" 2>/dev/null || true)"
-check "trixie: repo nPerf memakai trusted=yes"         '[ "${NPTRIXIE_A:-0}" -ge 1 ] && [ "${NPTRIXIE_B:-0}" -ge 1 ]'
+NPTRIXIE_SB="$(grep -cF "signed-by=" "$WORK/etc/apt/sources.list.d/nperf.list" 2>/dev/null || true)"
+NPTRIXIE_T="$(grep -cF "trixie main" "$WORK/etc/apt/sources.list.d/nperf.list" 2>/dev/null || true)"
+NPTRIXIE_TRUSTED="$(grep -cF "trusted=yes" "$WORK/etc/apt/sources.list.d/nperf.list" 2>/dev/null || true)"
+check "trixie: repo nPerf memakai signed-by (bukan trusted)" '[ "${NPTRIXIE_SB:-0}" -ge 1 ] && [ "${NPTRIXIE_T:-0}" -ge 1 ] && [ "${NPTRIXIE_TRUSTED:-0}" -eq 0 ]'
+
+# Jalur darurat: NPERF_APT_TRUSTED=Ya di speedtest-repo.conf → [trusted=yes] (conf otoritatif)
+rm -f "$WORK/etc/apt/sources.list.d/nperf.list"
+NPTRIXIE_BACKUP="$(cat "$WORK/nperfbase/speedtest-repo.conf")"
+sed -i 's/^NPERF_APT_TRUSTED=.*/NPERF_APT_TRUSTED="Ya"/' "$WORK/nperfbase/speedtest-repo.conf"
+ns_run_nperf 'timeout 120 bash ./bagian12_nperf_server.sh ./data.ini > /dev/null 2>&1; exit 0'
+printf '%s\n' "$NPTRIXIE_BACKUP" > "$WORK/nperfbase/speedtest-repo.conf"
+NPTRIXIE_TR2="$(grep -cF "trusted=yes" "$WORK/etc/apt/sources.list.d/nperf.list" 2>/dev/null || true)"
+check "NPERF_APT_TRUSTED=Ya (conf) → trusted=yes" '[ "${NPTRIXIE_TR2:-0}" -ge 1 ]'
 printf 'ID=debian\nID_LIKE=debian\nVERSION_ID="12"\nVERSION_CODENAME=bookworm\n' > "$WORK/etc/os-release"
+
+# ── D3. Pin fingerprint kunci repo: kunci ASING harus DITOLAK ───────────────
+cp -f "$WORK/nperf_shims/curl" "$WORK/nperf_shims/curl.asli" 2>/dev/null || true
+# gpg ASLI diperlukan untuk membaca fingerprint; shim gpg (uji dearmor biasa)
+# dinonaktifkan sementara lalu dipulihkan di akhir blok D3.
+mv -f "$WORK/nperf_shims/gpg" "$WORK/nperf_shims/gpg.off" 2>/dev/null || true
+if command -v gpg >/dev/null 2>&1; then
+  rm -rf "$WORK/gnupg" && mkdir -p "$WORK/gnupg" && chmod 700 "$WORK/gnupg"
+  if GNUPGHOME="$WORK/gnupg" gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
+       --quick-generate-key 'nPerf Test Key <test@example.invalid>' rsa2048 sign 1d >/dev/null 2>&1; then
+    GNUPGHOME="$WORK/gnupg" gpg --batch --armor --export 'test@example.invalid' > "$WORK/nperf_fix/repository.key" 2>/dev/null || true
+    REAL_FP="$(GNUPGHOME="$WORK/gnupg" gpg --with-colons --list-keys 2>/dev/null | awk -F: '$1=="fpr"{print $10; exit}')"
+    cp -f "$WORK/nperf_fix/repository.key" "$WORK/nperf_shims/repository.key.armored"
+    # Shim curl menyajikan kunci hasil generate (bukan kunci palsu) untuk uji ini.
+    cat > "$WORK/nperf_shims/curl" <<'EOFCURL'
+#!/bin/sh
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    http://*|https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+case "$url" in
+  *127.0.0.1:8081*|*127.0.0.1:8080*)
+    printf 'HTTP/1.1 200 OK\r\nServer: nPerf/2.2.11\r\nContent-Length: 2\r\n\r\nOK\n'
+    exit 0 ;;
+esac
+if [ -n "${E2E_NPERF_OFFLINE:-}" ]; then exit 22; fi
+case "$url" in
+  *repository.key)
+    [ -n "$out" ] && cp -f "${E2E_NPERF_KEYFILE:-/dev/null}" "$out"
+    exit 0 ;;
+  *upload.php.src)
+    [ -n "$out" ] && printf '<?php echo "upload-ok"; ?>\n' > "$out"
+    exit 0 ;;
+esac
+[ -n "$out" ] && : > "$out"
+exit 0
+EOFCURL
+    chmod +x "$WORK/nperf_shims/curl"
+    rm -f "$WORK/etc/apt/sources.list.d/nperf.list" "$WORK/etc/apt/keyrings/nperf.asc"
+    # Pin diubah lewat speedtest-repo.conf (conf otoritatif, bukan env).
+    NPERF_FP_BACKUP="$(cat "$WORK/nperfbase/speedtest-repo.conf")"
+    sed -i 's/^NPERF_GPG_FINGERPRINT=.*/NPERF_GPG_FINGERPRINT="DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"/' "$WORK/nperfbase/speedtest-repo.conf"
+    ns_run_nperf 'timeout 120 bash ./bagian12_nperf_server.sh ./data.ini > "$WORK/nperf5a.out" 2>&1; echo "EXIT=$?" > "$WORK/nperf5a.exit"; exit 0' \
+      "export E2E_NPERF_KEYFILE=$WORK/nperf_fix/repository.key"
+    check "kunci GPG asing (fingerprint beda) DITOLAK"     'grep -q "Fingerprint kunci repo nPerf TIDAK cocok" "'"$WORK"'/nperf5a.out"'
+    check "kunci asing tidak meninggalkan repo nPerf"      '[ ! -f "'"$WORK"'/etc/apt/sources.list.d/nperf.list" ]'
+    check "kunci asing dihapus dari keyring apt"           '[ ! -f "'"$WORK"'/etc/apt/keyrings/nperf.asc" ]'
+    check "repo ditolak → peringatan penutup ke operator"  'grep -q "Repo resmi nPerf TIDAK terpasang" "'"$WORK"'/nperf5a.out"'
+    check "penolakan repo bersifat DEFERRABLE (rc 0)"      'grep -qx "EXIT=0" "'"$WORK"'/nperf5a.exit"'
+    # Sekarang fingerprint BENAR → kunci diterima & repo ditulis.
+    if [ -n "$REAL_FP" ]; then
+      sed -i "s|^NPERF_GPG_FINGERPRINT=.*|NPERF_GPG_FINGERPRINT=\"$REAL_FP\"|" "$WORK/nperfbase/speedtest-repo.conf"
+      rm -f "$WORK/etc/apt/keyrings/nperf.asc"
+      ns_run_nperf 'timeout 120 bash ./bagian12_nperf_server.sh ./data.ini > "$WORK/nperf5b.out" 2>&1; echo "EXIT=$?" > "$WORK/nperf5b.exit"; exit 0' \
+        "export E2E_NPERF_KEYFILE=$WORK/nperf_fix/repository.key"
+      check "kunci GPG dengan fingerprint benar diterima"   'grep -q "Kunci repo nPerf terverifikasi" "'"$WORK"'/nperf5b.out" && [ -f "'"$WORK"'/etc/apt/sources.list.d/nperf.list" ]'
+    else
+      echo "   (fingerprint kunci uji tidak terbaca — uji positif dilewati)"
+    fi
+    printf '%s\n' "$NPERF_FP_BACKUP" > "$WORK/nperfbase/speedtest-repo.conf"
+  else
+    echo "   (gpg tidak bisa membuat kunci uji — uji pin fingerprint dilewati)"
+  fi
+else
+  echo "   (gpg tidak tersedia — uji pin fingerprint dilewati)"
+fi
+# Pulihkan shim curl asli (uji selanjutnya memakai jalur normal).
+[ -f "$WORK/nperf_shims/curl.asli" ] && cp -f "$WORK/nperf_shims/curl.asli" "$WORK/nperf_shims/curl" && chmod +x "$WORK/nperf_shims/curl"
+[ -f "$WORK/nperf_shims/gpg.off" ] && mv -f "$WORK/nperf_shims/gpg.off" "$WORK/nperf_shims/gpg"
 
 # ── E. NPERF_ENABLED=Tidak → modul dilewati (tidak menyentuh config) ────────
 sed -i 's/^PORT="8081"/PORT="8080"/' "$WORK/etc/nperf/nperf-server.conf"
@@ -1430,6 +1516,123 @@ check "uninstall mendaftarkan bagian12 di MANAGED_FILES" 'grep -q "bagian12_nper
 check "auto_update_lib memutakhirkan bagian12"          'grep -q "bagian12_nperf_server.sh" "'"$REPO_ROOT"'/auto_update_lib.sh"'
 check "regen-checksums memuat bagian12"                 'grep -q "bagian12_nperf_server.sh" "'"$REPO_ROOT"'/tools/regen-checksums.sh"'
 check "instalasi penuh (uji 1) menjalankan bagian12"    'grep -q "Bagian 12: nPerf Server" "'"$WORK"'/install.out"'
+
+
+echo
+echo "=== 21) Hardening v8.2.1: parser conf aman, integritas unduhan, pin hash ==="
+
+# ── A. Parser speedtest-repo.conf: komentar inline + TANPA eksekusi shell ────
+mkdir -p "$WORK/hard" && cp -f "$WORK/repo/common_functions1.sh" "$WORK/repo/auto_update_lib.sh" "$WORK/hard/"
+cat > "$WORK/hard/speedtest-repo.conf" <<'EOF'
+REPORT_FAST_SCHEDULE="*/5 * * * *"   # komentar inline di luar kutip
+HOSTS_MARKER='speedtest-managed'     # tanda kutip tunggal
+DANGER_TEST="x"; touch /tmp/st-e2e/hard/PWNED
+EOF
+rm -f "$WORK/hard/PWNED"
+unshare -rm --map-root-user bash -c '
+  WORK="'"$WORK"'"
+  export PATH="/usr/bin:/bin"
+  export BASE_DIR="$WORK/hard"
+  . "$WORK/hard/common_functions1.sh" >/dev/null 2>&1
+  printf "%s\n" "$REPORT_FAST_SCHEDULE" > "$WORK/hard/parsed.sched"
+  printf "%s\n" "$HOSTS_MARKER"         > "$WORK/hard/parsed.marker"
+  printf "%s\n" "$DANGER_TEST"          > "$WORK/hard/parsed.danger"
+  exit 0
+'
+check "conf: komentar inline dibuang dari nilai"        'grep -qx "\*/5 \* \* \* \*" "'"$WORK"'/hard/parsed.sched"'
+check "conf: nilai berkutip tunggal dibaca utuh"        'grep -qx "speedtest-managed" "'"$WORK"'/hard/parsed.marker"'
+check "conf TIDAK dieksekusi sebagai shell (anti-RCE)"  '[ ! -f "'"$WORK"'/hard/PWNED" ]'
+check "conf: sisa perintah tidak ikut terparsing"     'grep -qx "x" "'"$WORK"'/hard/parsed.danger"'
+
+# ── B. au_load_repo_config mengenali kunci NPERF_* (regresi v8.2.0) ──────────
+cat > "$WORK/hard/speedtest-repo.conf" <<'EOF'
+NPERF_ENABLED="Tidak"
+NPERF_HTTP_PORT="9091"
+NPERF_HTTP_FILES_DIR="/srv/nperf-http"   # komentar inline
+OOKLA_CLI_ALLOW_UNVERIFIED="Ya"
+EOF
+unshare -rm --map-root-user bash -c '
+  WORK="'"$WORK"'"
+  export PATH="/usr/bin:/bin"
+  . "$WORK/hard/auto_update_lib.sh" >/dev/null 2>&1
+  au_load_repo_config "$WORK/hard" >/dev/null 2>&1
+  printf "enabled=%s port=%s dir=%s ookla=%s\n" \
+    "${NPERF_ENABLED:-}" "${NPERF_HTTP_PORT:-}" "${NPERF_HTTP_FILES_DIR:-}" "${OOKLA_CLI_ALLOW_UNVERIFIED:-}" \
+    > "$WORK/hard/au.parsed"
+  exit 0
+'
+check "au_load_repo_config membaca NPERF_* (port & dir)" 'grep -qx "enabled=Tidak port=9091 dir=/srv/nperf-http ookla=Ya" "'"$WORK"'/hard/au.parsed"'
+
+# ── C. install.sh --verify-only: bersih = rc 0, dirusak = rc 1 + nama file ───
+rm -rf "$WORK/hardbase" && mkdir -p "$WORK/hardbase"
+for f in $MANAGED_LIST; do [ -f "$WORK/repo/$f" ] && cp -f "$WORK/repo/$f" "$WORK/hardbase/$f"; done
+cp -f "$WORK/unit/data2.ini" "$WORK/hardbase/data.ini"
+ns_run_hard() {
+  unshare -rm --map-root-user bash -c '
+    WORK="'"$WORK"'"
+    mount --bind "$WORK/etc" /etc 2>/dev/null
+    mount --bind "$WORK/rootfs2" /root 2>/dev/null
+    mount --bind "$WORK/localbin" /usr/local/bin 2>/dev/null
+    mount --bind "$WORK/usr_sbin_fake" /usr/sbin 2>/dev/null
+    export PATH="$WORK/shims:/usr/bin:/bin:/usr/local/bin"
+    export E2E_CRONTAB="$WORK/crontab.hard"
+    export HOME=/root
+    cd "$WORK/hardbase" || exit 1
+    '"$1"'
+  '
+}
+ns_run_hard 'bash ./install.sh --verify-only > "$WORK/hard/verify1.out" 2>&1; echo "EXIT=$?" > "$WORK/hard/verify1.exit"; exit 0'
+check "install.sh --verify-only OK pada file utuh"      'grep -q "EXIT=0" "'"$WORK"'/hard/verify1.exit" && grep -q "Integritas file terkelola OK" "'"$WORK"'/hard/verify1.out"'
+printf '\n# rusak sengaja oleh uji\n' >> "$WORK/hardbase/bagian10_hosts_ssh.sh"
+ns_run_hard 'bash ./install.sh --verify-only > "$WORK/hard/verify2.out" 2>&1; echo "EXIT=$?" > "$WORK/hard/verify2.exit"; exit 0'
+check "--verify-only GAGAL saat file dirusak (rc=1)"    'grep -q "EXIT=1" "'"$WORK"'/hard/verify2.exit"'
+check "--verify-only menyebut file yang tidak cocok"    'grep -q "bagian10_hosts_ssh.sh" "'"$WORK"'/hard/verify2.out"'
+check "install.sh --help menjelaskan --verify-only"     'bash "'"$REPO_ROOT"'/install.sh" --help 2>&1 | grep -q -- "--verify-only"'
+
+# ── D. Verifikasi integritas ikut berjalan di instalasi & self-update ────────
+check "instalasi penuh melaporkan integritas file"      'grep -q "Integritas file terkelola" "'"$WORK"'/install.out"'
+check "self-update memverifikasi integritas pasca-update" '[ -f "'"$WORK"'/selfupdate.pasca.log" ] && grep -q "Integritas file terkelola" "'"$WORK"'/selfupdate.pasca.log"'
+check "speedtestctl punya aksi verify"                  'grep -qE "^  verify\\)" "'"$REPO_ROOT"'/bagian8_cek_konfigurasi.sh"'
+
+# ── E. Bagian8: nperf-restart harus berpesan jelas (uji statis) ─────────────
+# Runtime tidak tepat diuji karena shim systemctl selalu ada di PATH mock;
+# kontraknya karena itu diuji statis pada sumber: jalur init.d, pesan jelas,
+# saran pemulihan.
+check "nperf-restart menangani jalur init.d"           'grep -q "/etc/init.d/nperf-server restart" "'"$REPO_ROOT"'/bagian8_cek_konfigurasi.sh"'
+check "nperf-restart berpesan jelas tanpa service"     'grep -q "Service nPerf tidak ditemukan" "'"$REPO_ROOT"'/bagian8_cek_konfigurasi.sh"'
+check "nperf-restart menyarankan perintah pemulihan"   'grep -q "bagian12_nperf_server.sh" "'"$REPO_ROOT"'/bagian8_cek_konfigurasi.sh"'
+
+# ── F. Backup drop-in sshd pindah ke /var/backups (bukan /tmp) ───────────────
+check "uninstall memakai /var/backups untuk backup sshd" 'grep -q "/var/backups/speedtest-sshd-dropin.conf.bak" "'"$REPO_ROOT"'/uninstall.sh"'
+check "tidak ada lagi backup drop-in sshd di /tmp"      '! grep -q "/tmp/99-speedtest-managed.conf.bak" "'"$REPO_ROOT"'/uninstall.sh"'
+
+# ── G. Pin hash pihak ketiga tertanam di skrip ──────────────────────────────
+check "bagian1 memuat pin SHA-256 CLI Ookla"            'grep -q "OOKLA_CLI_SHA256_X86_64=" "'"$REPO_ROOT"'/bagian1_install_dependency.sh" && grep -q "biner TIDAK dipasang" "'"$REPO_ROOT"'/bagian1_install_dependency.sh"'
+check "bagian7 memuat pin SHA-256 biner ZeroTier"       'grep -q "3a68aac810d7f80948c6e50bf318d204c8b43091a9179adf03ec11aa0a4675c1" "'"$REPO_ROOT"'/bagian7_network.sh"'
+check "bagian7 menolak biner tanpa pin (default)"       'grep -q "ZT_ALLOW_UNPINNED_BINARY" "'"$REPO_ROOT"'/bagian7_network.sh" && grep -q "Biner TIDAK dipasang" "'"$REPO_ROOT"'/bagian7_network.sh"'
+check "conf memuat kunci pin integritas baru"           'grep -q "^OOKLA_CLI_SHA256=" "'"$REPO_ROOT"'/speedtest-repo.conf" && grep -q "^ZT_BIN_SHA256=" "'"$REPO_ROOT"'/speedtest-repo.conf"'
+
+# ── I. Escape placeholder sed: '&' dan '|' tidak merusak file hasil ──────────
+# Fungsi diambil apa adanya dari sumber (uji implementasi nyata, bukan tiruan).
+SED_ESC_FN="$(sed -n '/^sed_escape_repl()/,/^}/p' "$REPO_ROOT/common_functions1.sh")"
+SED_ESC_AMP="$(bash -c "${SED_ESC_FN}; sed_escape_repl '/opt/amp&dir'" 2>/dev/null || true)"
+SED_ESC_PIPE="$(bash -c "${SED_ESC_FN}; sed_escape_repl '/opt/a|b'" 2>/dev/null || true)"
+SED_ESC_BACK="$(bash -c "${SED_ESC_FN}; sed_escape_repl '/opt/back\\slash'" 2>/dev/null || true)"
+check "sed_escape_repl meng-escape '&'"                  '[ "${SED_ESC_AMP:-}" = "/opt/amp\&dir" ]'
+check "sed_escape_repl meng-escape '|'"                  '[ "${SED_ESC_PIPE:-}" = "/opt/a\|b" ]'
+check "sed_escape_repl menggandakan backslash"           '[ "${SED_ESC_BACK:-}" = "/opt/back\\\\slash" ]'
+eval "$SED_ESC_FN"
+printf 'BASE=__BASE__\n' > "$WORK/hard/amp.test"
+sed -i "s|__BASE__|$(sed_escape_repl '/opt/amp&dir/x')|" "$WORK/hard/amp.test"
+check "substitusi sed nyata menghasilkan path utuh"      'grep -qx "BASE=/opt/amp\\&dir/x" "'"$WORK"'/hard/amp.test"'
+PLACEHOLDER_SED="$(grep -rn 'sed -i "s|__' "$REPO_ROOT/bagian8_cek_konfigurasi.sh" "$REPO_ROOT/bagian4_install_server_certificate.sh" 2>/dev/null | grep -vc 'sed_escape_repl' || true)"
+check "semua substitusi placeholder pakai helper"        '[ "${PLACEHOLDER_SED:-0}" -eq 0 ]'
+
+# ── H. Audit statis dari tool sendiri (parity + gate) wajib lolos ───────────
+AUDIT_RC=0
+timeout 120 python3 "$REPO_ROOT/tools/audit_cmd_deps.py" > "$WORK/hard/audit.out" 2>&1 || AUDIT_RC=$?
+check "audit_cmd_deps.py lolos (parity conf + gate)"    '[ "'"$AUDIT_RC"'" = "0" ]'
+check "audit melaporkan parity 5x kunci conf"           'grep -q "kunci conf semuanya dikenali loader" "'"$WORK"'/hard/audit.out"'
 
 echo
 echo "============================================================"

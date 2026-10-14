@@ -193,7 +193,7 @@ CERTBOT_BIN="$(command -v certbot 2>/dev/null || true)"
 } >> "$LOG" 2>&1
 exit 0
 RENEOF
-        sed -i "s|__BASE_DIR__|$BASE_DIR|; s|__CRON_PATH__|$CRON_PATH_RESOLVED|" "$BASE_DIR/certbot-renew.sh"
+        sed -i "s|__BASE_DIR__|$(sed_escape_repl "${BASE_DIR}")|; s|__CRON_PATH__|$(sed_escape_repl "${CRON_PATH_RESOLVED}")|" "$BASE_DIR/certbot-renew.sh"
         chmod a+x "$BASE_DIR/certbot-renew.sh"
         if cron_apply "# speedtest-cert-renew (managed)" \
              "23 4 * * * bash $BASE_DIR/certbot-renew.sh >/dev/null 2>&1"; then
@@ -242,7 +242,7 @@ if [ "$days" -lt 21 ]; then
 fi
 exit 0
 CHKEOF
-        sed -i "s|__DOMAIN__|$Domain|; s|__FULLCHAIN__|$FULLCHAIN|; s|__BASE_DIR__|$BASE_DIR|; s|__CRON_PATH__|$CRON_PATH_RESOLVED|; s|__CERT_LIVE_DIR__|${CERT_LIVE_DIR:-/etc/letsencrypt/live}|" "$BASE_DIR/cert-check.sh"
+        sed -i "s|__DOMAIN__|$(sed_escape_repl "${Domain}")|; s|__FULLCHAIN__|$(sed_escape_repl "${FULLCHAIN}")|; s|__BASE_DIR__|$(sed_escape_repl "${BASE_DIR}")|; s|__CRON_PATH__|$(sed_escape_repl "${CRON_PATH_RESOLVED}")|; s|__CERT_LIVE_DIR__|$(sed_escape_repl "${CERT_LIVE_DIR:-/etc/letsencrypt/live}")|" "$BASE_DIR/cert-check.sh"
         chmod a+x "$BASE_DIR/cert-check.sh"
         if cron_apply "# speedtest-cert-check (managed)" \
              "41 4 * * * bash $BASE_DIR/cert-check.sh >/dev/null 2>&1"; then

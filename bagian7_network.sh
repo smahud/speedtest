@@ -50,7 +50,6 @@ if ! command -v log_info >/dev/null 2>&1; then
   log_ok()    { printf '[OK] %s\n' "$1"; }
   log_warn()  { printf '[WARN] %s\n' "$1" >&2; }
   log_error() { printf '[ERROR] %s\n' "$1" >&2; }
-  die()       { log_error "$1"; exit "${2:-1}"; }
 fi
 if ! command -v command_exists >/dev/null 2>&1; then
   command_exists() { command -v "$1" >/dev/null 2>&1; }
@@ -214,10 +213,30 @@ install_zerotier() {
         arch="$(uname -m)"
         raw_url="${REPO_RAW_BASE_DEFAULT:-https://raw.githubusercontent.com/smahud/speedtest/main}"
         remote_bin="$raw_url/zerotier/zerotier-one-$arch-alpine"
+        # ── PIN SHA-256 biner statis (hardening v8.2.1) ──────────────────────
+        # Biner ini dijalankan sebagai root, jadi WAJIB diverifikasi. Bila hash
+        # untuk arsitektur ini tidak dipin, pemasangan DITOLAK kecuali operator
+        # menyetel ZT_ALLOW_UNPINNED_BINARY="Ya" di speedtest-repo.conf.
+        ZT_BIN_SHA256="${ZT_BIN_SHA256:-}"
+        ZT_ALLOW_UNPINNED_BINARY="${ZT_ALLOW_UNPINNED_BINARY:-Tidak}"
+        case "$arch" in
+          x86_64) want_bin_sum="${ZT_BIN_SHA256:-3a68aac810d7f80948c6e50bf318d204c8b43091a9179adf03ec11aa0a4675c1}" ;;
+          *)      want_bin_sum="$ZT_BIN_SHA256" ;;
+        esac
         tmp_bin="$(mktemp)"
         if wget -q -O "$tmp_bin" "$remote_bin" 2>/dev/null; then
-          # Verifikasi SHA-256 bila file checksum tersedia di repo (mencegah
-          # mengeksekusi biner yang korrupt/ditukar).
+          # Verifikasi SHA-256: PIN (wajib, di atas) + file .sha256 di repo
+          # (dua sumber; keduanya harus konsisten bila keduanya ada).
+          if [ -z "$want_bin_sum" ]; then
+            if [ "$ZT_ALLOW_UNPINNED_BINARY" != "Ya" ]; then
+              rm -f "$tmp_bin"
+              log_error "PIN hash biner ZeroTier untuk arsitektur '$arch' belum tersedia."
+              log_error "Biner TIDAK dipasang. Set ZT_BIN_SHA256=<sha256 resmi> atau"
+              log_error "ZT_ALLOW_UNPINNED_BINARY=\"Ya\" di speedtest-repo.conf bila setuju."
+              return 1
+            fi
+            log_warn "PIN hash biner ZeroTier tidak ada & verifikasi diizinkan dilewati (ZT_ALLOW_UNPINNED_BINARY=Ya)."
+          fi
           sum_url="$remote_bin.sha256"
           tmp_sum="$(mktemp)"
           if wget -q -O "$tmp_sum" "$sum_url" 2>/dev/null && [ -s "$tmp_sum" ]; then
@@ -231,12 +250,28 @@ install_zerotier() {
             fi
             if [ -n "$want_sum" ] && [ -n "$got_sum" ] && [ "$want_sum" != "$got_sum" ]; then
               rm -f "$tmp_bin" "$tmp_sum"
-              log_error "Checksum biner ZeroTier TIDAK cocok — dibatalkan."
+              log_error "Checksum biner ZeroTier TIDAK cocok (file .sha256 repo) — dibatalkan."
               return 1
             fi
-            log_ok "Checksum biner ZeroTier terverifikasi."
+            if [ -n "$want_bin_sum" ] && [ -n "$got_sum" ] && [ "$want_bin_sum" != "$got_sum" ]; then
+              rm -f "$tmp_bin" "$tmp_sum"
+              log_error "Checksum biner ZeroTier TIDAK cocok (PIN) — dibatalkan."
+              return 1
+            fi
+            if [ -n "$got_sum" ] && { [ -n "$want_sum" ] || [ -n "$want_bin_sum" ]; }; then
+              log_ok "Checksum biner ZeroTier terverifikasi (${got_sum:0:12}…)."
+            fi
           else
-            log_warn "File checksum biner ZeroTier tidak tersedia — melanjutkan tanpa verifikasi."
+            if [ -n "$want_bin_sum" ] && [ -n "$got_sum" ] && [ "$want_bin_sum" != "$got_sum" ]; then
+              rm -f "$tmp_bin" "$tmp_sum"
+              log_error "Checksum biner ZeroTier TIDAK cocok (PIN) — dibatalkan."
+              return 1
+            fi
+            if [ -n "$want_bin_sum" ] && [ -n "$got_sum" ]; then
+              log_ok "Checksum biner ZeroTier terverifikasi via PIN (${got_sum:0:12}…)."
+            else
+              log_warn "File checksum biner ZeroTier tidak tersedia — melanjutkan tanpa verifikasi."
+            fi
           fi
           rm -f "$tmp_sum" 2>/dev/null || true
 

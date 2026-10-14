@@ -588,10 +588,17 @@ if [ -f "$SSHD_DROPIN" ]; then
     SSHD_BIN=""
     if command -v sshd >/dev/null 2>&1; then SSHD_BIN="$(command -v sshd)"
     elif [ -x /usr/sbin/sshd ]; then SSHD_BIN="/usr/sbin/sshd"; fi
-    cp -p "$SSHD_DROPIN" "/tmp/99-speedtest-managed.conf.bak" 2>/dev/null || true
+    # Backup ditaruh di /var/backups (bukan /tmp: /tmp bisa dibersihkan sistem /
+    # ditempel proses lain, dan operator tidak tahu ke mana harus melihat).
+    SSHD_BAK="/var/backups/speedtest-sshd-dropin.conf.bak"
+    mkdir -p "$(dirname "$SSHD_BAK")" 2>/dev/null || true
+    cp -p "$SSHD_DROPIN" "$SSHD_BAK" 2>/dev/null || SSHD_BAK=""
     rm -f "$SSHD_DROPIN"
+    if [ -z "$SSHD_BAK" ]; then
+      log_warn "Backup drop-in sshd gagal dibuat — file tetap dihapus sesuai permintaan."
+    fi
     if [ -n "$SSHD_BIN" ] && ! "$SSHD_BIN" -t >/dev/null 2>&1; then
-      cp -p "/tmp/99-speedtest-managed.conf.bak" "$SSHD_DROPIN" 2>/dev/null || true
+      [ -n "$SSHD_BAK" ] && cp -p "$SSHD_BAK" "$SSHD_DROPIN" 2>/dev/null || true
       log_warn "Konfigurasi sshd jadi tidak valid tanpa file ini — file dipulihkan."
     else
       if command -v systemctl >/dev/null 2>&1; then
@@ -599,7 +606,11 @@ if [ -f "$SSHD_DROPIN" ]; then
       elif command -v rc-service >/dev/null 2>&1; then
         rc-service sshd reload >/dev/null 2>&1 || true
       fi
-      log_ok "Drop-in sshd dihapus (backup: /tmp/99-speedtest-managed.conf.bak)."
+      if [ -n "$SSHD_BAK" ]; then
+        log_ok "Drop-in sshd dihapus (backup: $SSHD_BAK)."
+      else
+        log_ok "Drop-in sshd dihapus."
+      fi
     fi
   fi
 else
