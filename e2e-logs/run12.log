@@ -1,0 +1,282 @@
+=== Uji E2E installer (mock environment) ===
+repo : /home/user/repo-speedtest
+work : /tmp/st-e2e
+
+=== 1) Instalasi penuh (lingkungan bersih) ===
+   exit: EXIT=0
+  [PASS] installer selesai tanpa error (rc=0)
+  [PASS] VERSION terpasang
+  [PASS] checksums.sha256 tersalin
+  [PASS] speedtest-repo.conf tersalin (config terpusat)
+  [PASS] speedtest-selfupdate.sh tersedia
+  [PASS] entri /etc/hosts managed ada (mv & fallback mount)
+  [PASS] entri hosts lama milik pengguna tetap utuh
+  [PASS] public key dipasang ke /root/.ssh/authorized_keys
+  [PASS] authorized_keys memuat blok penanda
+  [PASS] permission authorized_keys = 600
+  [PASS] drop-in sshd ditulis
+  [PASS] drop-in sshd memuat PermitRootLogin
+  [PASS] drop-in sshd memuat PubkeyAuthentication yes
+  [PASS] password auth TIDAK dimatikan secara default
+  [PASS] cron self-update terpasang
+  [PASS] cron boot-sync terpasang
+  [PASS] NAT ZT dipulihkan via bagian10 --postboot
+  [PASS] cron usang zt-nat-restore tidak ada
+  [PASS] cron report speedtest terpasang
+  [PASS] cron daily restart terpasang
+  [PASS] cron moon updater terpasang
+  [PASS] cron renewal sertifikat terpasang (Cloudflare)
+  [PASS] wrapper renewal sertifikat dibuat
+  [PASS] verifikasi akhir dijalankan
+  [PASS] verifikasi: OoklaServer OK
+  [PASS] verifikasi: mapping hosts OK
+  [PASS] verifikasi: kunci SSH OK
+  [PASS] verifikasi: ZeroTier OK
+  [PASS] installer mengaktifkan layanan cron
+  [PASS] SSH memakai pustaka bersama (ssh_sync_all)
+  [PASS] helper user_home dipakai (tanpa getent langsung)
+  [PASS] tidak ada hack fallback .apk untuk kunci SSH
+  [PASS] moon updater menanam MOON_ID dari repo (fix heredoc)
+  [PASS] moon updater memakai path absolut zerotier-cli
+  [PASS] properties memuat path sertifikat
+  [PASS] state file menyimpan VERSION & REPO
+  [PASS] smoke test laporan dijalankan saat instalasi
+  [PASS] CLI dipanggil dengan flag lisensi (non-interaktif)
+  [PASS] log instalasi dibuat
+
+--- Cron terpasang (mock crontab) ---
+   # zt-moon-updater (managed)
+   */15 * * * * /usr/local/bin/zt-moon-updater.sh >/dev/null 2>&1
+   # speedtest-boot-sync (managed)
+   @reboot bash /tmp/st-e2e/base/bagian10_hosts_ssh.sh --postboot >/dev/null 2>&1
+   # speedtest-autoupdate (managed)
+   17 3 * * * bash /tmp/st-e2e/base/speedtest-selfupdate.sh >/dev/null 2>&1
+   # ookla-daily-restart
+   0 0 * * * cd /tmp/st-e2e/base && /tmp/st-e2e/base/ooklaserver.sh restart
+   # speedtest-report (managed)
+   0 * * * * /tmp/st-e2e/base/cron-speedtest.sh
+   */5 * * * * /tmp/st-e2e/base/cron-speedtest5.sh
+   # speedtest-cert-renew (managed)
+   23 4 * * * bash /tmp/st-e2e/base/certbot-renew.sh >/dev/null 2>&1
+
+=== 2) Idempotensi: jalankan installer lagi ===
+   exit: EXIT=0
+  [PASS] run kedua sukses (rc=0)
+  [PASS] jumlah baris cron tidak bertambah
+  [PASS] entri hosts tidak terduplikasi
+  [PASS] blok kunci SSH tidak terduplikasi
+
+=== 3) Self-update otomatis (repo mock naik ke 99.0.0) ===
+   [INFO] Mengunduh dari: file:///tmp/st-e2e/repo
+   [INFO] Memperbarui versi: 8.1.1 -> 99.0.0 (3 file berubah)
+   [OK] Backup: /tmp/st-e2e/base/.backups/20261014-011350
+   [OK] Self-update selesai: 3 file dipasang (versi 99.0.0).
+   [INFO] 21 file lolos verifikasi SHA-256.
+  [PASS] self-update berhasil (rc=0)
+  [PASS] VERSION terpasang naik ke 99.0.0
+  [PASS] file bagian0 ikut ter-update
+  [PASS] backup versi lama dibuat
+  [PASS] update.log dibuat
+  [PASS] hosts tetap konsisten setelah update
+
+=== 4) ZeroTier WAJIB: node belum di-authorize harus GAGAL ===
+   [ERROR] Node BELUM di-authorize setelah 3s (Node ID: deadbeef00, status: 200 listnetworks 72ff30f9733a82d9 mynet aa:bb:cc:dd:ee:ff 10.147.17.8/24 ACCESS_DENIED PRIVATE).
+   [ERROR] Buka controller ZeroTier Anda → network 72ff30f9733a82d9 → AUTHORIZE node deadbeef00
+   [ERROR] atau (bila node diketahui lewat API/CLI controller): authorize by node ID.
+   [ERROR] ZeroTier belum ter-authorize. Authorize node di controller, lalu
+  [PASS] bagian7 GAGAL saat node belum di-authorize
+
+=== 5) ZeroTier: node ter-authorize harus SUKSES ===
+   [INFO] Network ID : 72ff30f9733a82d9
+   [OK] Node ter-authorize (status OK).
+   [INFO] Menjalankan orbit moon sekali sekarang...
+   [WARN] Orbit moon gagal (detail: /var/log/zt-moon-updater.log) — akan dicoba lagi via cron.
+   [OK] Bagian 7 selesai — node terhubung ke jaringan kontrol ZeroTier.
+  [PASS] bagian7 SUKSES saat node ter-authorize
+  [PASS] orbit moon dijalankan
+  [PASS] orbit moon tercatat di output
+  [PASS] kebijakan interface: allowManaged=1 (C6)
+  [PASS] kebijakan interface: allowDefault=0 (C6 anti-loop)
+  [PASS] kebijakan interface: allowGlobal=0 (C6)
+
+=== 6) Uninstall (tidak destruktif) ===
+     Untuk install ulang:
+       wget -O install.sh bit.ly/ooklaserverlinux
+       bash ./install.sh
+   
+     ZeroTier akan menggunakan Node ID yang SAMA.
+   ============================================================
+  [PASS] uninstall selesai (rc=0)
+  [PASS] entri hosts managed dihapus
+  [PASS] entri hosts pengguna tetap ada
+  [PASS] data.ini disimpan
+  [PASS] file installer dibersihkan (install.sh hilang)
+  [PASS] cron milik installer dibersihkan
+  [PASS] kunci SSH managed dihapus dari authorized_keys
+
+=== 7) Uji mode ONE-LINER (pipe): curl ... | bash ===
+   [INFO] Management tool : /tmp/st-e2e/base2/speedtestctl.sh
+   [INFO] Self-update     : /tmp/st-e2e/base2/speedtest-selfupdate.sh (cron harian otomatis)
+   [INFO] Cek pembaruan   : bash /tmp/st-e2e/base2/speedtest-selfupdate.sh --dry-run
+   [INFO] Cleanup total   : bash /tmp/st-e2e/base2/uninstall.sh
+   [INFO] 
+   [INFO] ZeroTier (wajib, hardcode di speedtest-repo.conf):
+   [INFO]   Network ID : 72ff30f9733a82d9
+   [INFO]   Status     : 200 listnetworks 72ff30f9733a82d9 mynet aa:bb:cc:dd:ee:ff 10.147.17.8/24 OK PRIVATE
+   [INFO] 
+   [INFO] Perintah management (bisa dari mana saja):
+   [INFO]   /tmp/st-e2e/base2/speedtestctl.sh status|start|stop|restart|logs|uninstall
+   ##################################################
+  [PASS] mode pipe (curl | bash) sukses
+  [PASS] mode pipe memasang install.sh ke BASE_DIR
+  [PASS] mode pipe memasang seluruh bagian
+  [PASS] mode pipe menulis /etc/hosts
+  [PASS] mode pipe memasang cron self-update
+  [PASS] mode pipe memasang kunci SSH
+
+=== 8) Re-exec anti version-skew ===
+  [PASS] installer mendukung re-exec (guard SPEEDTEST_REEXEC)
+  [PASS] self-update memakai cmp (tidak menulis file identik)
+  [PASS] parser config menangani komentar inline
+
+=== 9) Kasus container: /etc/hosts adalah mount point ===
+  [PASS] penulisan hosts berhasil walau /etc/hosts mount point
+  [PASS] entri hosts milik user tetap ada
+
+=== 10) Ketahanan: crontab gagal (cron API error) ===
+  [PASS] bagian6 tetap sukses walau crontab error
+  [PASS] bagian6 memberi peringatan yang jelas
+  [PASS] crontab tidak rusak/di-truncate saat error
+
+=== 11) Unit test: pola entri cron (regresi @reboot) ===
+  [PASS] pola entri @reboot benar (bukan 2>&1)
+  [PASS] pola entri 5-field benar
+  [PASS] pola entri wrapper benar
+
+=== 12) Saklar reporting (REPORT_FAST_ENABLED=Tidak) ===
+  [PASS] bagian6 sukses dengan laporan cepat dimatikan
+  [PASS] jadwal cepat (5 menit) benar-benar dihapus
+  [PASS] jadwal per jam tetap ada
+  [PASS] entri milik bagian lain tidak tersentuh
+
+=== 13) Regresi B13/B14: laporan cron HARUS jalan dengan PATH cron minimal ===
+  [PASS] instalasi ulang (base4) sukses untuk uji lanjutan
+  [PASS] wrapper memuat PATH eksplisit (CRON_PATH)
+  [PASS] wrapper memakai path absolut CLI Ookla
+  [PASS] wrapper membawa flag lisensi
+  [PASS] wrapper menulis log laporan
+  [PASS] kontrol: tanpa --accept-license CLI gagal (perilaku asli)
+   mock speedtest run OK
+   2026-10-14 01:16:47 [report] url=speedtest.example.com rc=0 (hourly)
+   Failed to connect to system scope bus via local transport: Operation not permitted (consider using --machine=<user>@.host --user to connect to bus of other user)
+   mock speedtest run OK
+   kontrol tanpa lisensi: rc_nolicense=1
+  [PASS] laporan per jam sukses pada PATH cron minimal
+  [PASS] laporan cepat sukses pada PATH cron minimal
+  [PASS] report.log mencatat rc=0 (tidak senyap lagi)
+  [PASS] report.log mencatat rc=0 untuk laporan cepat
+  [PASS] wrapper handal: CLI dipanggil dengan flag lisensi
+  [PASS] KONTROL: tanpa flag lisensi CLI gagal (rc=1)
+  [PASS] dengan flag lisensi CLI sukses (rc=0)
+  [PASS] wrapper lolos sintaks POSIX (/bin/sh -n)
+  [PASS] smoke test install memakai flag lisensi
+
+=== 14) Regresi B15/B16: NAT postboot --postboot tidak senyap + idempotent ===
+   rule iptables tercatat: 3
+   [INFO] Konfigurasi NAT masquerade (idempotent)...
+   [OK] NAT: 10.147.17.8/24 → eth0 (masquerade zt5f0a1b2c9, terverifikasi).
+  [PASS] postboot berhasil dengan PATH minimal (iptables ditemukan)
+  [PASS] rule NAT benar-benar terpasang (3 rule)
+  [PASS] log sukses hanya setelah rule terverifikasi
+  [PASS] masquerade dibatasi subnet ZeroTier (bukan generik)
+  [PASS] tidak ada masquerade generik di POSTROUTING
+  [PASS] postboot kedua idempotent (tidak menumpuk rule)
+  [PASS] postboot mengaktifkan IP forwarding (status sysctl)
+  [PASS] postboot menegakkan kebijakan interface ZT
+   [ERROR] Gagal menambah rule iptables: POSTROUTING -t nat -s 10.147.17.8/24 -o eth0 -j MASQUERADE
+   [ERROR] Gagal menambah rule iptables: FORWARD -i zt5f0a1b2c9 -o eth0 -j ACCEPT
+   [ERROR] Gagal menambah rule iptables: FORWARD -i eth0 -o zt5f0a1b2c9 -m state --state RELATED,ESTABLISHED -j ACCEPT
+  [PASS] postboot GAGAL bila iptables tidak bekerja
+  [PASS] TIDAK ada log sukses palsu saat NAT gagal
+   [INFO] bagian10 (postboot): menegakkan /etc/hosts + akses SSH + NAT ZeroTier
+   [OK] Entri /etc/hosts sudah ada: 127.0.0.1 speedtest.example.com # speedtest-managed
+   [INFO] 2 kunci publik valid dari https://github.com/smahud.keys.
+   [INFO] Memulihkan NAT/forwarding ZeroTier (bagian7_network.sh --postboot)...
+   [OK] NAT ZeroTier dipulihkan.
+  [PASS] bagian10 --postboot (jalur @reboot) sukses
+  [PASS] @reboot menegakkan NAT (rule scoped terpasang)
+  [PASS] bagian7 menerima --postboot tanpa data.ini
+
+=== 15) Regresi B17: cert_valid_for memeriksa masa berlaku (bukan keberadaan) ===
+   valid=0
+   expiring=1
+   expired=1
+   missing=1
+   days_active=365
+  [PASS] sertifikat valid (365 hari) → dianggap berlaku
+  [PASS] sertifikat sisa 3 hari → diterbitkan ulang
+  [PASS] sertifikat KEDALUWARSA → diterbitkan ulang
+  [PASS] sertifikat tidak ada → diterbitkan ulang
+
+=== 16) Audit: PATH cron, dependensi perintah, dan sisa pemanggilan rentan ===
+  [PASS] audit dependensi perintah lulus
+  [PASS] bagian6 menanam PATH ke wrapper cron
+  [PASS] bagian7 mengekspor PATH (sbin terlihat cron)
+  [PASS] bagian10 memperluas PATH (sbin terlihat cron)
+  [PASS] self-update memperluas PATH
+  [PASS] pustaka PATH bersama ada di common
+  [PASS] artefak cron bagian4 (renewal) punya PATH
+  [PASS] bagian7 membatasi masquerade ke subnet ZT
+  [PASS] bagian7 menerima --postboot tanpa data.ini
+  [PASS] bagian7 menegakkan kebijakan interface ZT (C6)
+  [PASS] kebijakan ZT non-fatal (tidak mematikan install)
+  [PASS] uninstall memakai penghapusan rule TERBATAS
+  [PASS] uninstall memakai path absolut iptables/ip
+  [PASS] refresh sertifikat memakai pustaka bersama
+  [PASS] tidak ada lagi 'speedtest -o' telanjang
+  [PASS] tidak ada pemanggilan iptables telanjang
+  [PASS] tidak ada pemanggilan sysctl telanjang
+  [PASS] speedtestctl punya aksi report + report-log
+  [PASS] uninstall hanya menghapus CLI Ookla
+  [PASS] uninstall tidak menyentuh speedtest-cli Python
+  [PASS] konfigurasi baru terdokumentasi di speedtest-repo.conf
+
+=== 17) Uninstall ulang: CLI non-Ookla milik operator TIDAK dihapus ===
+     UNINSTALL COMPREHENSIVE — Speedtest OoklaServer
+       • Speedtest CLI
+   ── Step 5: Menghapus Speedtest CLI (Ookla) ──
+   [INFO] Dilewati (bukan CLI Ookla, milik operator): /usr/local/bin/speedtest
+  [PASS] uninstall sukses dijalankan ulang (idempotent)
+  [PASS] CLI non-Ookla milik operator tetap ada
+  [PASS] alasan dilewati dicatat jelas
+
+=== 18) Unit: normalisasi RegisteredSpeedtestURL (C5) & masa berlaku sertifikat (B17) ===
+   REG=speedtest.example.com
+   HOST=speedtest.example.com
+  [PASS] URL penuh dinormalisasi jadi hostname (C5)
+  [PASS] hostname_of lepas skema+port+path
+   valid.example.com=LULUS
+   expiring.example.com=DIPERBARUI
+   expired.example.com=DIPERBARUI
+   missing.example.com=DIPERBARUI
+   valid.days=90
+  [PASS] cert 90 hari dianggap masih berlaku
+  [PASS] cert sisa 5 hari (min 10) dipicu perbarui
+  [PASS] cert KEDALUWARSA tidak lolos (regresi B17)
+  [PASS] domain tanpa sertifikat tidak lolos
+
+=== 19) Uninstall: anti-menggantung + pembersihan tag cron lama (C7) ===
+       • Rule iptables NAT spesifik ZeroTier + entri /etc/hosts terkelola
+       • Rule NAT milik layanan lain (Docker/libvirt/K8s TIDAK disentuh)
+   ── Step 7: Membersihkan IP forwarding & iptables NAT ──
+   [INFO] Menghapus rule NAT spesifik ZeroTier (bila ada)...
+   [OK] Rule masquerade ZeroTier (10.147.17.8/24 → eth0) dihapus.
+  [PASS] uninstall TIDAK menggantung walau iptables aneh
+  [PASS] uninstall selesai normal (rc=0)
+  [PASS] tag cron lama (boot-fallback) ikut dibersihkan
+  [PASS] cron milik operator TIDAK terhapus
+
+============================================================
+  HASIL:  150 PASS / 0 FAIL
+  Output lengkap: /tmp/st-e2e/install.out , /tmp/st-e2e/install2.out
+============================================================
