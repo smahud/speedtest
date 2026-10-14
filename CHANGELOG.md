@@ -1,5 +1,78 @@
 # Ringkasan Perubahan (Revisi Path-Aware)
 
+## v8.1.1 — Perbaikan menyeluruh hasil audit ronde 2 (B13–B20 + C5–C7)
+Semua temuan `LAPORAN_ANALISA_RONDE2.md` dikerjakan **tanpa terkecuali**, ditambah
+temuan baru yang muncul saat uji ulang. Ringkas:
+
+**Reporting / cron (B13, B14, B19)**
+1. **Lisensi Ookla CLI diterima non-interaktif.** CLI Ookla menolak berjalan tanpa
+   TTY bila lisensi belum diterima → cron reporting selalu gagal senyap.
+   `bagian1` kini memanggil CLI dengan `--accept-license --accept-gdpr`
+   (`SPEEDTEST_CLI_LICENSE_FLAGS`), dan wrapper cron selalu membawa flag tersebut.
+2. **PATH eksplisit di semua artefak cron.** Kunci `CRON_PATH` dipusatkan di
+   `speedtest-repo.conf`; wrapper bagian6, `speedtestctl.sh`, artefak bagian4
+   (`certbot-renew.sh`, `cert-check.sh`), `speedtest-selfupdate.sh`, dan bagian10
+   memuat PATH itu (pustaka `path_augment_from_cron_path()` di common). CLI Ookla
+   juga dipanggil via path absolut.
+3. **Log & exit code laporan.** Setiap eksekusi menulis satu baris `rc=…` ke
+   `$BASE_DIR/report.log` dengan rotasi (`REPORT_LOG_MAX_KB`), plus perintah
+   `speedtestctl.sh report` / `report-log`. Kegagalan tidak lagi senyap.
+
+**Jaringan pasca-reboot (B15, B16, C6)**
+4. `iptables`/`sysctl`/`ip` dipanggil via path absolut (`network_bin()` mencari
+   `/usr/sbin`, `/sbin`, lalu `command -v`) sehingga jalur `@reboot` tidak lagi
+   bergantung pada PATH cron.
+5. `ipt_ensure()` menambah **verifikasi ulang** (`-C` setelah `-A`); pesan sukses
+   NAT hanya muncul bila seluruh rule benar-benar terpasang (log sukses palsu
+   dihapus).
+6. **NAT dibatasi subnet ZeroTier** (`-s $ZT_SUBNET`), bukan masquerade generik →
+   tidak menumbuk NAT Docker/libvirt/K8s dan uninstall bisa menghapus hanya rule
+   milik kita.
+7. **Kebijakan interface ZeroTier (C6, baru)** — `configure_zt_policy()` di bagian7
+   menegakkan `zerotier-cli set <net> allowManaged=1`, `allowDefault=0`,
+   `allowGlobal=0` saat instalasi dan pada setiap `--postboot`. `allowDefault=0`
+   mencegah server memakai jaringan exit-node sebagai default route-nya sendiri
+   (loop / konektivitas putus). Non-fatal: kegagalan hanya WARN.
+8. `bagian7` menerima `--postboot` **dan** `-postboot`; sebelumnya `--postboot`
+   (yang dipakai bagian10/11 & dokumentasi) mencoba membaca `data.ini` bernama
+   `--postboot` lalu berhenti dengan error → NAT pasca-reboot tidak pernah ditegakkan.
+9. `enable_ip_forwarding()` menulis nilai runtime (`sysctl -w`) dan memverifikasi
+   lewat `sysctl -n` (fallback `/proc/sys`), bukan hanya lewat file `/etc/sysctl.d`.
+
+**Sertifikat (B17, B18)**
+10. `cert_valid_for()` benar-benar memeriksa masa berlaku (`openssl x509 -checkend`
+    + `cert_days_left()`, ambang `CERT_MIN_VALID_DAYS`, default 10 hari) — versi lama
+    hanya memeriksa keberadaan file sehingga sertifikat kedaluwarsa dianggap layak.
+11. Verifikasi akhir menambah uji endpoint TLS (`TLS_VERIFY_ENABLED`, `TLS_VERIFY_STRICT`,
+    default WARN saja) via `endpoint_*_probe()`.
+
+**Konfigurasi & kebersihan (B20, C5, C7)**
+12. **C5**: `RegisteredSpeedtestURL` boleh berisi URL lengkap → dinormalisasi ke
+    hostname (`hostname_of()`) sebelum ditulis ke `/etc/hosts`, sehingga muncul
+    kembali sebagai bug "hosts tidak cocok".
+13. **C7**: `open_ports()` menurunkan port ZeroTier dari `OoklaServer.properties`
+    (`ookla_props_ports()`), dengan fallback `8080 5060` — port tidak lagi
+    di-hardcode dan tidak ada dua daftar yang bisa menyimpang.
+14. **Uninstall anti-menggantung**: `ipt_del_max()` (maksimum N, verifikasi tiap
+    langkah, path absolut) menggantikan loop tak terbatas yang bisa hang bila
+    backend iptables "mengaku ada" tetapi tidak menghapus. Rule generik warisan
+    versi lama dihapus maksimum satu + peringatan operator. Penghapusan CLI hanya
+    untuk CLI Ookla (CLI `speedtest-cli` Python milik operator tidak disentuh).
+15. `bagian4` menanam `PATH="__CRON_PATH__"` ke artefak cron hasil generate dan
+    `certbot-renew.sh` mendeteksi `CERTBOT_BIN`; bagian5 memakai `CERT_LIVE_DIR`.
+16. Pemanggilan rentan / tanpa guard dibersihkan (`open_ports` iptables absolut,
+    `pkill`/`while iptables`/pemanggilan `speedtest -o` telanjang), dan
+    `tools/audit_cmd_deps.py` diperluas (bagian A/B/B2/D/E) untuk menegakkan
+    disiplin ini di masa depan.
+
+**Pengujian**
+17. Harness E2E diperluas jauh: instalasi Nyata di namespace (`unshare`),
+    idempotensi, self-update, gerbang ZeroTier (belum/sudah authorize), uninstall
+    (termasuk mode iptables "berbohong" anti-hang), mode pipe `curl | bash`,
+    `/etc/hosts` sebagai mount point, uji laporan cron pada PATH minimal (dengan
+    kontrol positif/negatif lisensi), NAT `--postboot`, masa berlaku sertifikat
+    (fixture), dan normalisasi config. **142 check, 0 FAIL** (log: `e2e-logs/`).
+
 ## v8.1.0 — ZeroTier hardcode, hosts localhost, auto-update, SSH kunci GitHub + audit menyeluruh
 Ringkas (rincian lengkap: `LAPORAN_IMPLEMENTASI_v8.md`):
 

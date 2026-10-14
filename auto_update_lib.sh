@@ -20,6 +20,23 @@
 
 su_run() { [ "$(id -u)" -eq 0 ]; }
 
+# PATH aman untuk konteks cron (iptables/sysctl ada di /usr/sbin yang tidak
+# disertakan cron Debian/Ubuntu/Alpine). Dihormati operator via $CRON_PATH.
+# PENTING: hanya MENAMBAH direktori yang belum ada — jangan menimpa PATH
+# (pernah memutus shim/mock dan memanggil apt-get asli saat pengujian).
+if ! command -v path_augment_from_cron_path >/dev/null 2>&1; then
+  path_augment_from_cron_path() {
+    local d
+    local IFS=':'
+    for d in ${CRON_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}; do
+      [ -n "$d" ] || continue
+      case ":$PATH:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d" ;; esac
+    done
+    export PATH
+  }
+fi
+path_augment_from_cron_path
+
 # ── Logging (fallback bila common belum dimuat) ──────────────────────────────
 if ! command -v au_log_info >/dev/null 2>&1; then
   au_log_info()  { printf '[INFO] %s\n' "$1"; }
@@ -87,6 +104,10 @@ au_load_repo_config() {
   SSH_ROOT_LOGIN=""; SSH_DISABLE_PASSWORD_AUTH=""; SSH_MARKER=""
   AUTO_UPDATE_ENABLED=""; AUTO_UPDATE_SCHEDULE_MIN=""; AUTO_UPDATE_SCHEDULE_HOUR=""
   AUTO_UPDATE_REEXEC_INSTALL=""; AUTO_UPDATE_KEEP_BACKUPS=""; AUTO_UPDATE_MAX_LOG_MB=""
+  REPORT_HOURLY_ENABLED=""; REPORT_FAST_ENABLED=""; REPORT_FAST_SCHEDULE=""; REPORT_LOG_MAX_KB=""
+  REPORT_JITTER_MIN_MAX=""
+  SPEEDTEST_CLI_PATH=""; SPEEDTEST_CLI_LICENSE_FLAGS=""; SPEEDTEST_SMOKE_TEST=""; SPEEDTEST_SMOKE_TIMEOUT=""
+  CRON_PATH=""; TLS_VERIFY_ENABLED=""; TLS_VERIFY_STRICT=""; CERT_MIN_VALID_DAYS=""
 
   f="$dir/speedtest-repo.conf"
   if [ -f "$f" ]; then
@@ -125,6 +146,19 @@ au_load_repo_config() {
         AUTO_UPDATE_REEXEC_INSTALL) AUTO_UPDATE_REEXEC_INSTALL="$val" ;;
         AUTO_UPDATE_KEEP_BACKUPS) AUTO_UPDATE_KEEP_BACKUPS="$val" ;;
         AUTO_UPDATE_MAX_LOG_MB) AUTO_UPDATE_MAX_LOG_MB="$val" ;;
+        REPORT_HOURLY_ENABLED) REPORT_HOURLY_ENABLED="$val" ;;
+        REPORT_FAST_ENABLED) REPORT_FAST_ENABLED="$val" ;;
+        REPORT_FAST_SCHEDULE) REPORT_FAST_SCHEDULE="$val" ;;
+        REPORT_LOG_MAX_KB) REPORT_LOG_MAX_KB="$val" ;;
+        REPORT_JITTER_MIN_MAX) REPORT_JITTER_MIN_MAX="$val" ;;
+        SPEEDTEST_CLI_PATH) SPEEDTEST_CLI_PATH="$val" ;;
+        SPEEDTEST_CLI_LICENSE_FLAGS) SPEEDTEST_CLI_LICENSE_FLAGS="$val" ;;
+        SPEEDTEST_SMOKE_TEST) SPEEDTEST_SMOKE_TEST="$val" ;;
+        SPEEDTEST_SMOKE_TIMEOUT) SPEEDTEST_SMOKE_TIMEOUT="$val" ;;
+        CRON_PATH) CRON_PATH="$val" ;;
+        TLS_VERIFY_ENABLED) TLS_VERIFY_ENABLED="$val" ;;
+        TLS_VERIFY_STRICT) TLS_VERIFY_STRICT="$val" ;;
+        CERT_MIN_VALID_DAYS) CERT_MIN_VALID_DAYS="$val" ;;
       esac
     done < "$f"
   fi
@@ -157,6 +191,19 @@ au_load_repo_config() {
   if [ -z "$AUTO_UPDATE_REEXEC_INSTALL" ]; then AUTO_UPDATE_REEXEC_INSTALL="Ya"; fi
   if [ -z "$AUTO_UPDATE_KEEP_BACKUPS" ]; then AUTO_UPDATE_KEEP_BACKUPS="5"; fi
   if [ -z "$AUTO_UPDATE_MAX_LOG_MB" ]; then AUTO_UPDATE_MAX_LOG_MB="5"; fi
+  if [ -z "$REPORT_HOURLY_ENABLED" ]; then REPORT_HOURLY_ENABLED="Ya"; fi
+  if [ -z "$REPORT_FAST_ENABLED" ]; then REPORT_FAST_ENABLED="Ya"; fi
+  if [ -z "$REPORT_FAST_SCHEDULE" ]; then REPORT_FAST_SCHEDULE="*/5 * * * *"; fi
+  if [ -z "$REPORT_LOG_MAX_KB" ]; then REPORT_LOG_MAX_KB="512"; fi
+  if [ -z "$REPORT_JITTER_MIN_MAX" ]; then REPORT_JITTER_MIN_MAX="50"; fi
+  if [ -z "$SPEEDTEST_CLI_PATH" ]; then SPEEDTEST_CLI_PATH="/usr/local/bin/speedtest"; fi
+  if [ -z "$SPEEDTEST_CLI_LICENSE_FLAGS" ]; then SPEEDTEST_CLI_LICENSE_FLAGS="--accept-license --accept-gdpr"; fi
+  if [ -z "$SPEEDTEST_SMOKE_TEST" ]; then SPEEDTEST_SMOKE_TEST="Ya"; fi
+  if [ -z "$SPEEDTEST_SMOKE_TIMEOUT" ]; then SPEEDTEST_SMOKE_TIMEOUT="150"; fi
+  if [ -z "$CRON_PATH" ]; then CRON_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"; fi
+  if [ -z "$TLS_VERIFY_ENABLED" ]; then TLS_VERIFY_ENABLED="Ya"; fi
+  if [ -z "$TLS_VERIFY_STRICT" ]; then TLS_VERIFY_STRICT="Tidak"; fi
+  if [ -z "$CERT_MIN_VALID_DAYS" ]; then CERT_MIN_VALID_DAYS="10"; fi
 
   export REPO_RAW_BASE_DEFAULT ZT_NETWORK_ID ZT_MOON_ID ZT_MOON_CONFIG_URL \
          ZT_ENABLE_EXIT_NODE ZT_REQUIRE_AUTHORIZATION ZT_AUTH_TIMEOUT ZT_INSTALL_IF_MISSING \
@@ -164,7 +211,11 @@ au_load_repo_config() {
          SSH_KEYS_URL SSH_TARGET_USERS SSH_MANAGE_SSHD SSH_INSTALL_SERVER \
          SSH_ROOT_LOGIN SSH_DISABLE_PASSWORD_AUTH SSH_MARKER \
          AUTO_UPDATE_ENABLED AUTO_UPDATE_SCHEDULE_MIN AUTO_UPDATE_SCHEDULE_HOUR \
-         AUTO_UPDATE_REEXEC_INSTALL AUTO_UPDATE_KEEP_BACKUPS AUTO_UPDATE_MAX_LOG_MB
+         AUTO_UPDATE_REEXEC_INSTALL AUTO_UPDATE_KEEP_BACKUPS AUTO_UPDATE_MAX_LOG_MB \
+         REPORT_HOURLY_ENABLED REPORT_FAST_ENABLED REPORT_FAST_SCHEDULE REPORT_LOG_MAX_KB \
+         REPORT_JITTER_MIN_MAX \
+         SPEEDTEST_CLI_PATH SPEEDTEST_CLI_LICENSE_FLAGS SPEEDTEST_SMOKE_TEST SPEEDTEST_SMOKE_TIMEOUT \
+         CRON_PATH TLS_VERIFY_ENABLED TLS_VERIFY_STRICT CERT_MIN_VALID_DAYS
   return 0
 }
 
@@ -347,6 +398,9 @@ EOF
 au_rotate_backups() {
   local base="$1" keep="${2:-5}" bdirs
   if [ ! -d "$base/.backups" ]; then return 0; fi
+  # 'ls -1dt' dipakai SENGAJA: sorting berdasarkan waktu, dan busybox 'find'
+  # (Alpine) tidak mendukung '-printf' sehingga alternatif find tidak portabel.
+  # shellcheck disable=SC2012
   bdirs="$(ls -1dt "$base/.backups"/*/ 2>/dev/null | tail -n +"$((keep + 1))" || true)"
   if [ -z "$bdirs" ]; then return 0; fi
   printf '%s\n' "$bdirs" | while IFS= read -r d; do

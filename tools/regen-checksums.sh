@@ -63,6 +63,7 @@ echo "[INFO] Membersihkan hash lama..."
 rm -f ./*.sha256 2>/dev/null || true
 
 echo "[INFO] Menulis MANIFEST..."
+# shellcheck disable=SC2086  # daftar file memang dipisah spasi/baris
 printf '%s\n' $MANAGED_FILES > MANIFEST
 
 echo "[INFO] Menghitung SHA-256 per file..."

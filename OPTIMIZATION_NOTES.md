@@ -93,6 +93,90 @@ Loop parsing argumen sebelumnya memicu pesan `Usage` pada beberapa shell minimal
 Modul ZeroTier membutuhkan `iptables` untuk NAT.
 **Fix:** Memastikan paket `iptables` terpasang di Alpine via dependency dasar di `install.sh`.
 
+## Ronde 2 (v8.1.1) — bug yang ditemukan lewat uji runtime nyata
+
+### B13. (KRITIS) Lisensi Ookla CLI tidak pernah diterima → cron reporting selalu gagal
+CLI Ookla memerlukan penerimaan lisensi/eula; pada konteks tanpa TTY (cron) ia
+menolak berjalan (`License not accepted. Exiting.`, exit 1). Wrapper cron v8.1.0
+memanggil `speedtest -o <host> …` → tiap laporan gagal, dan output dibuang.
+**Bukti empiris:** `speedtest -s <id>` exit 1 tanpa `--accept-license`;
+`-L --accept-license --accept-gdpr` exit 0 dan menulis
+`~/.config/ookla/speedtest-cli.json`.
+**Fix:** `bagian1` menerima lisensi saat instalasi (`SPEEDTEST_CLI_LICENSE_FLAGS`),
+wrapper cron selalu membawa flag yang sama.
+
+### B14. (TINGGI) PATH cron tidak memuat `/usr/local/bin` (lokasi CLI Ookla)
+Cron berjalan dengan `PATH=/usr/bin:/bin`; CLI Ookla dipasang di `/usr/local/bin`.
+**Fix:** `CRON_PATH` (di `speedtest-repo.conf`) ditanam eksplisit ke setiap artefak
+cron; CLI juga dipanggil via path absolut + fallback `command -v`.
+
+### B15. (TINGGI) `iptables`/`sysctl` tanpa path absolut pada jalur `@reboot`
+Binary jaringan ada di `/usr/sbin` (atau `/sbin`) yang tidak terlihat pada PATH
+cron minimal → NAT pasca-reboot tidak pernah terpasang.
+**Fix:** `network_bin()` mencari `/usr/sbin`, `/sbin`, baru `command -v`.
+
+### B16. (SEDANG) Kegagalan `ipt_ensure` disembunyikan + log sukses palsu
+Pemanggilan `|| true` membuat NAT yang gagal tetap tercatat "berhasil".
+**Fix:** kegagalan dihitung (`failed=1`), rule diverifikasi ulang dengan `-C`,
+dan `log_ok` hanya muncul bila semuanya benar-benar terpasang.
+
+### B17. (SEDANG) `cert_valid_for` hanya memeriksa keberadaan sertifikat
+Sertifikat kedaluwarsa tetap dianggap "valid" → tidak pernah diperbarui.
+**Fix:** `openssl x509 -checkend` + `cert_days_left()` dengan ambang
+`CERT_MIN_VALID_DAYS`; `certbot-renew.sh`/`cert-check.sh` memakai pustaka bersama.
+
+### B18. (RENDAH) Tidak ada verifikasi HTTPS end-to-end
+Sertifikat "ada" belum berarti endpoint TLS melayani domain tersebut.
+**Fix:** `endpoint_http_probe()` / `endpoint_tls_probe()` di verifikasi akhir
+(`TLS_VERIFY_ENABLED`, `TLS_VERIFY_STRICT`; default WARN agar tidak memblokir).
+
+### B19. (RENDAH) Output wrapper cron dibuang tanpa log
+Laporan gagal tanpa jejak apa pun. **Fix:** `report.log` (+rotasi
+`REPORT_LOG_MAX_KB`), satu baris per eksekusi dengan `rc=`, dan aksi
+`speedtestctl.sh report|report-log`.
+
+### B20. (INFO) Kebersihan pemanggilan & port
+Port ZeroTier di-`open_ports()` kini diturunkan dari `OoklaServer.properties`
+(`ookla_props_ports()`, fallback `8080 5060`) — satu sumber kebenaran, tidak
+mungkin menyimpang dari konfigurasi server.
+
+### C5. (FIX) `RegisteredSpeedtestURL` boleh berupa URL lengkap
+Nilai mentah ditulis ke `/etc/hosts` (mis. `https://host/path`) sehingga mapping
+tidak pernah cocok. **Fix:** `hostname_of()` menormalkan sebelum dipakai
+(hosts, verifikasi, laporan) — diuji sebagai unit test.
+
+### C6. (FIX, baru) Kebijakan interface ZeroTier belum pernah diterapkan
+Topologi exit-node mensyaratkan setelan sisi server:
+`allowManaged=1` (route/IP terkelola tetap dipasang),
+`allowDefault=0` (**mencegah server memakai jaringan exit-node sebagai default
+route-nya sendiri** — bila controller mem-push `0.0.0.0/0`, host dapat mengirim
+traffic internetnya kembali ke tunnel miliknya sendiri → loop/putus koneksi),
+`allowGlobal=0` (route bertanda global diabaikan di sisi server).
+**Fix:** `configure_zt_policy()` di bagian7 dipanggil saat instalasi dan pada
+setiap `--postboot`, non-fatal (WARN) agar tidak memblokir instalasi bila
+`zerotier-cli` belum siap.
+
+### C7. (FIX) `uninstall.sh` bisa menggantung tak terbatas
+Loop `while iptables -C …; do iptables -D …; done` tanpa batas iterasi dan tanpa
+path absolut: bila backend "mengaku ada" tetapi gagal menghapus, uninstall
+menggantung selamanya. **Fix:** `ipt_del_max()` (batas iterasi, verifikasi tiap
+penghapusan, path absolut `IPT_BIN`). Diuji dengan mode iptables "berbohong"
+(`E2E_IPTABLES_LIE`) di bawah `timeout`.
+
+### C8. (FIX) `bagian7 --postboot` membaca `data.ini` bernama `--postboot`
+Pengecualian mode hanya mengenali `-postboot` (satu strip), sementara cron
+`@reboot` bagian10 memanggil `--postboot` → pesan `data.ini tidak ditemukan:
+'--postboot'`, NAT pasca-reboot **tidak pernah** ditegakkan (ditemukan pada E2E
+run #7). **Fix:** kedua bentuk diterima; mode postboot memakai
+`SPEEDTEST_SCRIPT_DIR` sebagai BASE_DIR dan melewati pembacaan config sepenuhnya.
+
+### C9. (FIX) Deteksi IP forwarding gagal di lingkungan terbatas
+Nilai verifikasi hanya dibaca dari `/proc/sys/net/ipv4/ip_forward`; pada container
+dengan `/proc/sys` read-only (atau saat `sysctl` tersedia tetapi nilai runtime
+belum diterapkan) fungsi mengembalikan WARN walau `/etc/sysctl.d` sudah benar.
+**Fix:** nilai runtime diterapkan dengan `sysctl -w`, verifikasi lewat
+`sysctl -n` lalu fallback `/proc/sys`.
+
 ## Status Verifikasi (diuji via harness mock end-to-end)
 - [x] Debian/Ubuntu: alur lengkap bagian0..8 OK, idempoten OK.
 - [x] RHEL/Rocky: OS family terdeteksi `rhel`, systemd unit dibuat OK.
@@ -102,7 +186,17 @@ Modul ZeroTier membutuhkan `iptables` untuk NAT.
       (tepat 2 baris report + 1 baris restart).
 - [x] Sertifikat valid existing → issuance dilewati.
 - [x] bagian7 `-postboot` jalan TANPA common (fallback) — fix bug boot.
-- [x] Semua file: `bash -n` OK, `shellcheck -S warning` 0 error/0 warning.
+- [x] bagian7 `--postboot` (jalur `@reboot` bagian10) jalan tanpa `data.ini`.
+- [x] Wrapper cron laporan sukses pada PATH minimal + flag lisensi (kontrol
+      negatif tanpa flag → gagal, kontrol positif dengan flag → sukses).
+- [x] NAT `--postboot`: 3 rule terpasang, scoped ke subnet ZeroTier, idempotent,
+      IP forwarding aktif, dan GAGAL bila iptables tidak bekerja (tanpa log palsu).
+- [x] Kebijakan interface ZeroTier ditegakkan (allowManaged/allowDefault/allowGlobal).
+- [x] Masa berlaku sertifikat: valid=90 hari → lolos; sisa 5 hari / kedaluwarsa /
+      tidak ada → diperbarui (regresi B17).
+- [x] Uninstall tidak menggantung walau iptables "berbohong" (`timeout` 90 s, rc=0).
+- [x] Semua file: `bash -n` OK, `shellcheck -S warning` 0 error/0 warning
+      (kecuali pengecualian yang didokumentasikan).
 
 ## Kompatibilitas Shell
 - Semua script memakai shebang `#!/usr/bin/env bash` & dipanggil via `bash`.

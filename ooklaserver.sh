@@ -125,7 +125,7 @@ restart_if_running() {
 
 stop_process() {
 	daemon_pid="$1"
-	printf "Stopping $DAEMON_FILE Daemon ($daemon_pid)"
+	printf 'Stopping %s Daemon (%s)\n' "$DAEMON_FILE" "$daemon_pid"
 	kill "$daemon_pid" >/dev/null 2>&1
 	for _ in $(seq 1 20); do
 		if kill -0 "$daemon_pid" >/dev/null 2>&1; then
@@ -147,6 +147,7 @@ stop_if_running() {
 				pids=$(pgrep OoklaServer 2>&1)
 				if [ -n "$pids" ]; then
 					echo "Stopping additional $DAEMON_FILE processes"
+					# shellcheck disable=SC2086  # $pids memuat BEBERAPA pid (harus dipecah)
 					kill -9 $pids
 				fi
 			fi
@@ -168,7 +169,7 @@ start_if_not_running() {
 }
 
 start() {
-	printf "Starting $DAEMON_FILE"
+	printf 'Starting %s\n' "$DAEMON_FILE"
 	dir_full=$(pwd)
 	if [ -f "$DAEMON_FILE" ]; then
 		chmod +x "$DAEMON_FILE"

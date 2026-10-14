@@ -41,12 +41,11 @@ ADMIN_EMAIL="${EmailCloudFlare:-}"
 # Domain dibaca dari data.ini saat runtime (load_and_validate_config)
 # shellcheck disable=SC2154
 [ -n "$ADMIN_EMAIL" ] || ADMIN_EMAIL="administrator@${Domain}"
-FULLCHAIN="/etc/letsencrypt/live/$Domain/fullchain.pem"
+FULLCHAIN="${CERT_LIVE_DIR:-/etc/letsencrypt/live}/$Domain/fullchain.pem"
+CRON_PATH_RESOLVED="${CRON_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
-# Apakah sertifikat untuk pola domain tertentu masih berlaku?
-cert_valid_for() {
-    certbot certificates --domain "$1" 2>/dev/null | grep -iq "Expiry Date"
-}
+# catatan: cert_valid_for()/cert_days_left() ada di common_functions1.sh
+# (dipakai bersama oleh bagian4, cert-check.sh, dan uji E2E).
 
 issue_cloudflare_wildcard() {
     log_info "Mode: Cloudflare + Wildcard (*.$Domain) — OTOMATIS."
@@ -150,6 +149,9 @@ fi
 
 if [ -f "$FULLCHAIN" ]; then
     log_ok "Sertifikat tersedia: $FULLCHAIN"
+    if ! cert_valid_for "$Domain"; then
+        log_warn "Sertifikat ada tetapi belum lolos verifikasi masa berlaku — cek: certbot certificates"
+    fi
 else
     die "Sertifikat gagal dibuat / file $FULLCHAIN tidak ditemukan."
 fi
@@ -168,22 +170,30 @@ schedule_cert_maintenance() {
 # --deploy-hook HANYA bila sertifikat benar-benar diperbarui.
 BASE_DIR="__BASE_DIR__"
 LOG="$BASE_DIR/update.log"
+
+# PATH eksplisit: cron hanya memberi /usr/bin:/bin (certbot bisa di
+# /usr/bin, tetapi deploy-hook memanggil ooklaserver.sh di BASE_DIR).
+PATH="__CRON_PATH__"
+export PATH
+CERTBOT_BIN="$(command -v certbot 2>/dev/null || true)"
+[ -n "$CERTBOT_BIN" ] || CERTBOT_BIN="/usr/bin/certbot"
+
 {
     printf '%s [INFO] certbot renew (otomatis) dimulai.\n' "$(date '+%F %T')"
     rc=0
     if command -v flock >/dev/null 2>&1; then
         flock -n /run/speedtest-certbot-renew.lock \
-            certbot renew --non-interactive --quiet \
+            "$CERTBOT_BIN" renew --non-interactive --quiet \
             --deploy-hook "cd $BASE_DIR && ./ooklaserver.sh restart" || rc=$?
     else
-        certbot renew --non-interactive --quiet \
+        "$CERTBOT_BIN" renew --non-interactive --quiet \
             --deploy-hook "cd $BASE_DIR && ./ooklaserver.sh restart" || rc=$?
     fi
     printf '%s [INFO] certbot renew selesai (rc=%s).\n' "$(date '+%F %T')" "$rc"
 } >> "$LOG" 2>&1
 exit 0
 RENEOF
-        sed -i "s|__BASE_DIR__|$BASE_DIR|" "$BASE_DIR/certbot-renew.sh"
+        sed -i "s|__BASE_DIR__|$BASE_DIR|; s|__CRON_PATH__|$CRON_PATH_RESOLVED|" "$BASE_DIR/certbot-renew.sh"
         chmod a+x "$BASE_DIR/certbot-renew.sh"
         if cron_apply "# speedtest-cert-renew (managed)" \
              "23 4 * * * bash $BASE_DIR/certbot-renew.sh >/dev/null 2>&1"; then
@@ -201,13 +211,30 @@ DOMAIN="__DOMAIN__"
 FULLCHAIN="__FULLCHAIN__"
 BASE_DIR="__BASE_DIR__"
 LOG="$BASE_DIR/update.log"
+
+# PATH eksplisit untuk konteks cron (openssl ada di /usr/bin, dokumentasi jelas).
+PATH="__CRON_PATH__"
+export PATH
+
 [ -f "$FULLCHAIN" ] || exit 0
-command -v openssl >/dev/null 2>&1 || exit 0
-end="$(openssl x509 -enddate -noout -in "$FULLCHAIN" 2>/dev/null | cut -d= -f2)"
-[ -n "$end" ] || exit 0
-end_epoch="$(date -d "$end" +%s 2>/dev/null || date -j -f "%b %e %T %Y %Z" "$end" +%s 2>/dev/null)"
-[ -n "$end_epoch" ] || exit 0
-days=$(( (end_epoch - $(date +%s)) / 86400 ))
+
+# Hitung sisa masa berlaku memakai pustaka bersama (SATU implementasi dengan
+# bagian4 + uji E2E — dulu duplikat yang bisa menyimpang).
+CERT_LIVE_DIR="__CERT_LIVE_DIR__"
+export CERT_LIVE_DIR
+if [ -f "$BASE_DIR/common_functions1.sh" ]; then
+    # shellcheck source=common_functions1.sh
+    . "$BASE_DIR/common_functions1.sh" >/dev/null 2>&1 || true
+fi
+days="$(cert_days_left "$DOMAIN" 2>/dev/null || true)"
+if [ -z "$days" ]; then
+    command -v openssl >/dev/null 2>&1 || exit 0
+    end="$(openssl x509 -enddate -noout -in "$FULLCHAIN" 2>/dev/null | cut -d= -f2)"
+    [ -n "$end" ] || exit 0
+    end_epoch="$(date -d "$end" +%s 2>/dev/null || date -j -f "%b %e %T %Y %Z" "$end" +%s 2>/dev/null)"
+    [ -n "$end_epoch" ] || exit 0
+    days=$(( (end_epoch - $(date +%s)) / 86400 ))
+fi
 if [ "$days" -lt 21 ]; then
     printf '%s [WARN] Sertifikat %s kedaluwarsa dalam %s hari — perbarui dengan menjalankan: bash %s/bagian4_install_server_certificate.sh (perlu verifikasi DNS manual).\n' \
         "$(date '+%F %T')" "$DOMAIN" "$days" "$BASE_DIR" >> "$LOG"
@@ -215,7 +242,7 @@ if [ "$days" -lt 21 ]; then
 fi
 exit 0
 CHKEOF
-        sed -i "s|__DOMAIN__|$Domain|; s|__FULLCHAIN__|$FULLCHAIN|; s|__BASE_DIR__|$BASE_DIR|" "$BASE_DIR/cert-check.sh"
+        sed -i "s|__DOMAIN__|$Domain|; s|__FULLCHAIN__|$FULLCHAIN|; s|__BASE_DIR__|$BASE_DIR|; s|__CRON_PATH__|$CRON_PATH_RESOLVED|; s|__CERT_LIVE_DIR__|${CERT_LIVE_DIR:-/etc/letsencrypt/live}|" "$BASE_DIR/cert-check.sh"
         chmod a+x "$BASE_DIR/cert-check.sh"
         if cron_apply "# speedtest-cert-check (managed)" \
              "41 4 * * * bash $BASE_DIR/cert-check.sh >/dev/null 2>&1"; then

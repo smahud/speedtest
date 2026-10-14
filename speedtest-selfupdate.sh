@@ -17,6 +17,21 @@
 ###############################################################################
 set -uo pipefail
 
+# ── PATH untuk konteks cron ──────────────────────────────────────────────────
+# Hanya MENAMBAH ($CRON_PATH), tidak menimpa PATH yang sudah ada.
+if ! command -v path_augment_from_cron_path >/dev/null 2>&1; then
+  path_augment_from_cron_path() {
+    local d
+    local IFS=':'
+    for d in ${CRON_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}; do
+      [ -n "$d" ] || continue
+      case ":$PATH:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d" ;; esac
+    done
+    export PATH
+  }
+fi
+path_augment_from_cron_path
+
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
 BASE_DIR="${BASE_DIR:-$SELF_DIR}"
 LOG_FILE="${BASE_DIR}/update.log"
@@ -124,13 +139,24 @@ esac
 
 # ── Penegakan konfigurasi wajib (hosts + SSH) ────────────────────────────────
 if [ -f "$BASE_DIR/bagian10_hosts_ssh.sh" ]; then
-  if bash "$BASE_DIR/bagian10_hosts_ssh.sh" -postboot >> "$LOG_FILE" 2>&1; then
+  if bash "$BASE_DIR/bagian10_hosts_ssh.sh" --postboot >> "$LOG_FILE" 2>&1; then
     log "bagian10 (hosts + SSH) OK."
   else
     log "bagian10 (hosts + SSH) mengembalikan error — periksa."
   fi
 else
   log "bagian10_hosts_ssh.sh tidak ada — langkah penegakan dilewati."
+fi
+
+# ── Uji ringan: apakah CLI Ookla masih bisa dipakai (path + lisensi)? ────────
+# Deteksi dini bug B13/B14 (laporan cron mati) tanpa perlu menjalankan
+# speedtest penuh: cukup pastikan biner ada di path yang dipakai cron.
+if [ -x "${SPEEDTEST_CLI_PATH:-/usr/local/bin/speedtest}" ]; then
+  log "Preflight laporan: CLI Ookla OK di ${SPEEDTEST_CLI_PATH:-/usr/local/bin/speedtest}."
+elif command -v speedtest >/dev/null 2>&1; then
+  log "Preflight laporan: CLI Ookla ditemukan di $(command -v speedtest) (bukan lokasi default)."
+else
+  log "PERINGATAN: CLI Ookla tidak ditemukan — laporan cron tidak akan berjalan. Jalankan bagian1."
 fi
 
 # ── Terapkan konfigurasi baru ke instalasi yang ada (install.sh idempotent) ──

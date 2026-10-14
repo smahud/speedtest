@@ -536,26 +536,26 @@ verify_final() {
   if pgrep -x OoklaServer >/dev/null 2>&1 \
      || { command_exists ss && ss -tln 2>/dev/null | grep -q ':8080 '; } \
      || { command_exists netstat && netstat -tln 2>/dev/null | grep -q ':8080 '; }; then
-    log_ok "  [OK]   OoklaServer berjalan (port 8080)."
+    log_ok "  OoklaServer berjalan (port 8080)."
   else
-    log_warn "  [WARN] OoklaServer belum terdeteksi — jalankan: $BASE_DIR/speedtestctl.sh restart"
+    log_warn "  OoklaServer belum terdeteksi — jalankan: $BASE_DIR/speedtestctl.sh restart"
   fi
 
   # 2) Mapping RegisteredSpeedtestURL → localhost
   ok_ip="${HOSTS_TARGET_IP:-127.0.0.1}"
   if [ -f "${HOSTS_FILE:-/etc/hosts}" ] \
      && grep -qF "${HOSTS_MARKER:-speedtest-managed}" "${HOSTS_FILE:-/etc/hosts}" 2>/dev/null; then
-    log_ok "  [OK]   Mapping ${Domain} → ${ok_ip} aktif di ${HOSTS_FILE:-/etc/hosts}."
+    log_ok "  Mapping ${Domain} → ${ok_ip} aktif di ${HOSTS_FILE:-/etc/hosts}."
   else
-    log_warn "  [WARN] Mapping hosts belum ada — cek: bash $BASE_DIR/bagian10_hosts_ssh.sh"
+    log_warn "  Mapping hosts belum ada — cek: bash $BASE_DIR/bagian10_hosts_ssh.sh"
   fi
 
   # 3) Akses SSH (kunci GitHub + sshd)
   if [ -f /root/.ssh/authorized_keys ] \
      && grep -qF "# BEGIN ${SSH_MARKER:-speedtest-managed-keys}" /root/.ssh/authorized_keys 2>/dev/null; then
-    log_ok "  [OK]   Kunci SSH (${SSH_KEYS_URL:-github.com/smahud.keys}) terpasang untuk root."
+    log_ok "  Kunci SSH (${SSH_KEYS_URL:-github.com/smahud.keys}) terpasang untuk root."
   else
-    log_warn "  [WARN] Kunci SSH belum terpasang — cek: bash $BASE_DIR/bagian9_ssh_access.sh"
+    log_warn "  Kunci SSH belum terpasang — cek: bash $BASE_DIR/bagian9_ssh_access.sh"
   fi
 
   # 4) Cron: entri wajib + daemon aktif
@@ -563,8 +563,8 @@ verify_final() {
     c="$(crontab -l 2>/dev/null || true)"
     for tag in "# speedtest-report (managed)" "# speedtest-autoupdate (managed)" "# speedtest-boot-sync (managed)"; do
       case "$c" in
-        *"$tag"*) log_ok "  [OK]   Cron terpasang: $tag" ;;
-        *)        log_warn "  [WARN] Cron tidak ditemukan: $tag" ;;
+        *"$tag"*) log_ok "  Cron terpasang: $tag" ;;
+        *)        log_warn "  Cron tidak ditemukan: $tag" ;;
       esac
     done
     for unit in cron crond cronie; do
@@ -572,27 +572,80 @@ verify_final() {
       if command_exists rc-service && rc-service "$unit" status >/dev/null 2>&1; then cron_unit="$unit"; break; fi
     done
     if [ -n "$cron_unit" ]; then
-      log_ok "  [OK]   Daemon cron aktif: $cron_unit"
+      log_ok "  Daemon cron aktif: $cron_unit"
     else
-      log_warn "  [WARN] Daemon cron belum terdeteksi aktif (jadwal tidak akan jalan)."
+      log_warn "  Daemon cron belum terdeteksi aktif (jadwal tidak akan jalan)."
     fi
   else
-    log_warn "  [WARN] crontab tidak tersedia — penjadwalan otomatis tidak aktif."
+    log_warn "  crontab tidak tersedia — penjadwalan otomatis tidak aktif."
   fi
 
   # 5) ZeroTier (wajib) — bagian7 sudah memverifikasi; ini konfirmasi ringkas.
   if command_exists zerotier-cli \
      && zerotier-cli listnetworks 2>/dev/null | grep -q "${ZT_NETWORK_ID:-__none__}"; then
-    log_ok "  [OK]   ZeroTier terhubung ke network ${ZT_NETWORK_ID:-?}."
+    log_ok "  ZeroTier terhubung ke network ${ZT_NETWORK_ID:-?}."
   else
-    log_warn "  [WARN] ZeroTier belum terhubung — cek: zerotier-cli listnetworks"
+    log_warn "  ZeroTier belum terhubung — cek: zerotier-cli listnetworks"
   fi
 
   # 6) Self-update otomatis siap
   if [ -x "$BASE_DIR/speedtest-selfupdate.sh" ]; then
-    log_ok "  [OK]   Self-update otomatis siap (cron harian + boot-sync)."
+    log_ok "  Self-update otomatis siap (cron harian + boot-sync)."
   else
-    log_warn "  [WARN] speedtest-selfupdate.sh tidak ada di $BASE_DIR."
+    log_warn "  speedtest-selfupdate.sh tidak ada di $BASE_DIR."
+  fi
+
+  # 7) Laporan speedtest BENAR-BENAR bisa jalan (bug B13/B14 v8.1.0):
+  #    - CLI resmi Ookla ditemukan di path yang dipakai cron (absolut)
+  #    - flag lisensi diterima (cron tidak punya TTY)
+  #    - satu uji nyata ke server lokal (bukti end-to-end; lewat 127.0.0.1)
+  local cli_bin report_log
+  cli_bin="$(ookla_cli_path)"
+  report_log="$BASE_DIR/report.log"
+  if [ -n "$cli_bin" ] && ookla_cli_is_official "$cli_bin"; then
+    log_ok "  CLI Ookla OK: $cli_bin"
+  else
+    log_warn "  CLI Ookla tidak ditemukan/dikenali di ${SPEEDTEST_CLI_PATH:-/usr/local/bin/speedtest}."
+  fi
+  if ookla_license_accepted; then
+    log_ok "  Lisensi Ookla tersimpan ($(ookla_license_file))."
+  else
+    log_info "  Lisensi Ookla belum tersimpan — wrapper cron tetap membawa flag lisensi."
+  fi
+  if [ "${SPEEDTEST_SMOKE_TEST:-Ya}" = "Ya" ] && [ -n "$RegisteredSpeedtestURL" ]; then
+    log_info "  Uji laporan end-to-end (speedtest -o $RegisteredSpeedtestURL), tunggu... "
+    if ookla_report_once "$RegisteredSpeedtestURL" "$report_log" "${SPEEDTEST_SMOKE_TIMEOUT:-150}"; then
+      log_ok "  Laporan speedtest BERHASIL (hasil & log: $report_log)."
+    else
+      log_warn "  Uji laporan gagal (rc=${LAST_REPORT_RC:-?}) — detail: $report_log"
+      printf '%s\n' "${LAST_REPORT_OUTPUT:-}" | tail -3 | sed 's/^/         /' >&2
+      log_warn "  Cek: lisensi (--accept-license), DNS/hosts, dan status OoklaServer."
+    fi
+  else
+    log_info "  Uji laporan end-to-end dilewati (SPEEDTEST_SMOKE_TEST=${SPEEDTEST_SMOKE_TEST:-Tidak})."
+  fi
+
+  # 8) Endpoint HTTPS/TLS melayani domain ini (bug B18)
+  if [ "${TLS_VERIFY_ENABLED:-Ya}" = "Ya" ]; then
+    local ports port tls_ok=0 http_ok=""
+    ports="$(ookla_props_ports "$OOKLA_PROPERTIES")"
+    for port in $(printf '%s' "${ports:-8080 5060}"); do
+      http_ok="$(endpoint_http_probe "$port" 2>/dev/null || true)"
+      if [ -n "$http_ok" ]; then break; fi
+    done
+    if [ -n "$http_ok" ]; then
+      log_ok "  Endpoint HTTP lokal menjawab (127.0.0.1:${port} → HTTP ${http_ok})."
+    else
+      log_warn "  Tidak ada port OoklaServer yang menjawab HTTP (${ports:-8080 5060})."
+    fi
+    for port in 443 8443 5061 5060 ${ports:-}; do
+      if endpoint_tls_probe "$Domain" "$port" 2>/dev/null; then tls_ok=1; break; fi
+    done
+    if [ "$tls_ok" -eq 1 ]; then
+      log_ok "  TLS terverifikasi untuk '$Domain' (127.0.0.1:${port})."
+    else
+      log_warn "  TLS belum terverifikasi untuk '$Domain' — uji: openssl s_client -connect 127.0.0.1:443 -servername $Domain"
+    fi
   fi
 }
 verify_final

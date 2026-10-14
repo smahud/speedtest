@@ -17,6 +17,24 @@
 ###############################################################################
 set -uo pipefail
 
+# ── PATH untuk konteks cron (@reboot) ───────────────────────────────────────
+# cron di Debian/Ubuntu/Alpine hanya memberi PATH=/usr/bin:/bin, sedangkan
+# iptables/sysctl/ip berada di /usr/sbin → tanpa ini, pemulihan NAT setelah
+# reboot gagal senyap ("command not found"). Lihat juga $CRON_PATH.
+# Hanya MENAMBAH ($CRON_PATH), tidak menimpa PATH yang sudah ada.
+if ! command -v path_augment_from_cron_path >/dev/null 2>&1; then
+  path_augment_from_cron_path() {
+    local d
+    local IFS=':'
+    for d in ${CRON_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}; do
+      [ -n "$d" ] || continue
+      case ":$PATH:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d" ;; esac
+    done
+    export PATH
+  }
+fi
+path_augment_from_cron_path
+
 SPEEDTEST_SCRIPT_DIR="${SPEEDTEST_SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)}"
 export SPEEDTEST_SCRIPT_DIR
 
@@ -40,10 +58,25 @@ fi
 
 MODE="${1:-}"
 
-if [ -z "${BASE_DIR:-}" ]; then
-  if [ "$MODE" != "-postboot" ] && command -v resolve_config_path >/dev/null 2>&1; then
-    resolve_config_path "${1:-}"; init_paths; detect_os; load_and_validate_config
-  fi
+if [ -n "${BASE_DIR:-}" ]; then
+  : # sudah diisi pemanggil (install.sh / bagian10 / self-update)
+else
+  case "$MODE" in
+    -postboot|--postboot)
+      # Mode @reboot: TIDAK memerlukan data.ini — hanya menegakkan ulang NAT.
+      # Bug lama: pengecualian hanya untuk '-postboot' (satu strip), sehingga
+      # pemanggilan '--postboot' (dipakai bagian10/11 & dokumentasi) berusaha
+      # membaca data.ini bernama '--postboot' lalu berhenti dengan
+      # "data.ini tidak ditemukan: '--postboot'".
+      BASE_DIR="$SPEEDTEST_SCRIPT_DIR"
+      export BASE_DIR
+      ;;
+    *)
+      if command -v resolve_config_path >/dev/null 2>&1; then
+        resolve_config_path "${1:-}"; init_paths; detect_os; load_and_validate_config
+      fi
+      ;;
+  esac
 fi
 
 # Bila konfigurasi repo belum termuat (common tidak ada), baca langsung.
@@ -69,6 +102,26 @@ ZEROTIER_CLI="/usr/sbin/zerotier-cli"
 UPDATER_SCRIPT="/usr/local/bin/zt-moon-updater.sh"
 UPDATER_LOG="/var/log/zt-moon-updater.log"
 UPDATER_CRON_TAG="# zt-moon-updater (managed)"
+
+# ── Path absolut tool jaringan ───────────────────────────────────────────────
+# Meskipun PATH di atas sudah benar, path eksplisit membuat skrip tahan
+# terhadap lingkungan aneh (mis. cron dengan PATH khusus) dan mudah diaudit.
+# network_bin() sudah ada di common_functions1.sh; definisi di bawah hanya
+# fallback bila common tidak termuat (mis. dijalankan dari cron tanpa lib).
+if ! command -v network_bin >/dev/null 2>&1; then
+  network_bin() {
+    local name="$1" cand p=""
+    shift
+    for cand in "$@"; do
+        if [ -n "$cand" ] && [ -x "$cand" ]; then p="$cand"; break; fi
+    done
+    [ -n "$p" ] || p="$(command -v "$name" 2>/dev/null || true)"
+    printf '%s' "$p"
+  }
+fi
+IPTABLES_BIN="$(network_bin iptables /usr/sbin/iptables /sbin/iptables)"
+SYSCTL_BIN="$(network_bin sysctl /usr/sbin/sysctl /sbin/sysctl)"
+IP_BIN="$(network_bin ip /usr/sbin/ip /sbin/ip)"
 
 # zerotier-cli tidak selalu ada di PATH (mis. cron: PATH=/usr/bin:/bin).
 zt_cli_path() {
@@ -334,14 +387,32 @@ enable_ip_forwarding() {
   log_info "Mengaktifkan IP forwarding..."
   if [ -d /etc/sysctl.d ]; then
     echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ipforward.conf
-    sysctl -p /etc/sysctl.d/99-ipforward.conf >/dev/null 2>&1 || true
+    if [ -n "${SYSCTL_BIN:-}" ]; then
+      "$SYSCTL_BIN" -p /etc/sysctl.d/99-ipforward.conf >/dev/null 2>&1 || true
+    fi
   else
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    if [ -n "${SYSCTL_BIN:-}" ]; then
+      "$SYSCTL_BIN" -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    fi
     grep -q '^net.ipv4.ip_forward' /etc/sysctl.conf 2>/dev/null \
       || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
   fi
-  local cur
-  cur="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)"
+  # Nilai runtime juga diterapkan langsung (di beberapa container hanya
+  # /etc/sysctl.d yang dipakai; di sistem lain sysctl -w perlu eksplisit).
+  local sysctl_bin="${SYSCTL_BIN:-}"
+  if [ -n "$sysctl_bin" ]; then
+    "$sysctl_bin" -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+  fi
+
+  # Verifikasi lewat sysctl dulu (portabel, termasuk container dengan
+  # /proc/sys read-only), lalu fallback baca /proc langsung.
+  local cur=""
+  if [ -n "$sysctl_bin" ]; then
+    cur="$("$sysctl_bin" -n net.ipv4.ip_forward 2>/dev/null | awk '{print $1}')"
+  fi
+  if [ -z "$cur" ]; then
+    cur="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)"
+  fi
   if [ "$cur" = "1" ]; then
     log_ok "IP forwarding aktif."
     return 0
@@ -351,42 +422,111 @@ enable_ip_forwarding() {
 }
 
 # Tambah rule hanya bila belum ada (mencegah penumpukan saat dijalankan ulang).
+# Tambah rule hanya bila belum ada (mencegah penumpukan saat dijalankan ulang).
+# Memakai path absolut $IPTABLES_BIN supaya tetap bekerja di konteks cron
+# (PATH minimal) — penyebab NAT tidak pernah dipulihkan setelah reboot.
 ipt_ensure() {
   # $1 = chain spec, $2.. = rule args
   local spec="$1"; shift
-  if iptables -C "$spec" "$@" 2>/dev/null; then
+  local bin="${IPTABLES_BIN:-}"
+  if [ -z "$bin" ]; then
+    log_error "iptables tidak ditemukan — rule '$spec' TIDAK dipasang."
+    return 1
+  fi
+  if "$bin" -C "$spec" "$@" 2>/dev/null; then
     return 0
   fi
-  iptables -A "$spec" "$@" 2>/dev/null || return 1
+  if ! "$bin" -A "$spec" "$@" 2>/dev/null; then
+    log_error "Gagal menambah rule iptables: $spec $*"
+    return 1
+  fi
+  # Verifikasi ulang: rule bisa gagal terpasang tanpa pesan (modul/kernel).
+  if ! "$bin" -C "$spec" "$@" 2>/dev/null; then
+    log_error "Rule iptables tidak terverifikasi setelah ditambahkan: $spec $*"
+    return 1
+  fi
   return 0
 }
 
 setup_nat() {
   log_info "Konfigurasi NAT masquerade (idempotent)..."
-  if ! command_exists iptables; then
-    log_warn "iptables tidak tersedia — NAT dilewati."
+  if [ -z "${IPTABLES_BIN:-}" ]; then
+    log_warn "iptables tidak tersedia — NAT dilewati (exit node tidak berfungsi)."
     return 1
   fi
 
-  local ZT_INTERFACE PUBLIC_INTERFACE
-  ZT_INTERFACE="$(ip -o link show 2>/dev/null | grep -o 'zt[a-z0-9]*' | head -n 1)"
-  PUBLIC_INTERFACE="$(ip route 2>/dev/null | grep default | awk '{print $5}' | head -n 1)"
+  local ZT_INTERFACE PUBLIC_INTERFACE ZT_SUBNET ip_bin="${IP_BIN:-}" failed=0
+  if [ -n "$ip_bin" ]; then
+    ZT_INTERFACE="$("$ip_bin" -o link show 2>/dev/null | grep -o 'zt[a-z0-9]*' | head -n 1)"
+    PUBLIC_INTERFACE="$("$ip_bin" route 2>/dev/null | grep default | awk '{print $5}' | head -n 1)"
+  fi
 
-  if [ -z "$ZT_INTERFACE" ] || [ -z "$PUBLIC_INTERFACE" ]; then
-    log_warn "Interface tidak ditemukan (ZT='${ZT_INTERFACE}', PUBLIC='${PUBLIC_INTERFACE}'). NAT dilewati."
+  if [ -z "${ZT_INTERFACE:-}" ] || [ -z "${PUBLIC_INTERFACE:-}" ]; then
+    log_warn "Interface tidak ditemukan (ZT='${ZT_INTERFACE:-}', PUBLIC='${PUBLIC_INTERFACE:-}'). NAT dilewati."
     return 1
   fi
 
-  ipt_ensure POSTROUTING -t nat -o "$PUBLIC_INTERFACE" -j MASQUERADE || true
-  ipt_ensure FORWARD -i "$ZT_INTERFACE" -o "$PUBLIC_INTERFACE" -j ACCEPT || true
-  ipt_ensure FORWARD -i "$PUBLIC_INTERFACE" -o "$ZT_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT || true
-  log_ok "NAT: $ZT_INTERFACE → $PUBLIC_INTERFACE (masquerade)."
-  return 0
+  # Masquerade DIBATASI ke subnet ZeroTier ($ZT_SUBNET, mis. 10.147.17.0/24).
+  # Dua alasan: (1) tidak menumbuk rule NAT milik layanan lain di host yang
+  # sama (Docker/libvirt/VPN), (2) uninstall dapat menghapus HANYA rule kita
+  # (versi lama memakai rule generik '-o $PUB -j MASQUERADE' sehingga uninstall
+  # harus menebak — dan bisa menghapus NAT operator).
+  if [ -n "$ip_bin" ]; then
+    ZT_SUBNET="$("$ip_bin" -4 -o addr show dev "$ZT_INTERFACE" 2>/dev/null | awk '{print $4}' | head -n 1)"
+  fi
+
+  if [ -n "${ZT_SUBNET:-}" ]; then
+    ipt_ensure POSTROUTING -t nat -s "$ZT_SUBNET" -o "$PUBLIC_INTERFACE" -j MASQUERADE || failed=1
+  else
+    log_warn "Subnet ZeroTier tidak terbaca dari $ZT_INTERFACE — memakai rule masquerade generik."
+    ipt_ensure POSTROUTING -t nat -o "$PUBLIC_INTERFACE" -j MASQUERADE || failed=1
+  fi
+  ipt_ensure FORWARD -i "$ZT_INTERFACE" -o "$PUBLIC_INTERFACE" -j ACCEPT || failed=1
+  ipt_ensure FORWARD -i "$PUBLIC_INTERFACE" -o "$ZT_INTERFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT || failed=1
+
+  # Pesan sukses HANYA bila seluruh rule benar-benar terpasang
+  # (bug lama: "log_ok NAT" selalu tercetak walau iptables gagal).
+  if [ "$failed" -eq 0 ]; then
+    log_ok "NAT: ${ZT_SUBNET:-?} → $PUBLIC_INTERFACE (masquerade $ZT_INTERFACE, terverifikasi)."
+    return 0
+  fi
+  log_error "NAT TIDAK lengkap: $ZT_INTERFACE → $PUBLIC_INTERFACE (lihat pesan ERROR di atas)."
+  return 1
 }
 
 # ===============================
 # MOON UPDATER (script mandiri + cron)
 # ===============================
+# ── Kebijakan interface ZeroTier (setelan routing sisi server) ───────────────
+# Menegakkan tiga setelan yang membuat topologi exit node aman & benar:
+#   * allowManaged=1 → route/IP terkelola dari controller tetap dipasang
+#     (server tetap mendapat IP subnet ZeroTier-nya);
+#   * allowDefault=0 → server TIDAK menjadikan jaringan ini sebagai default
+#     route-nya sendiri. Bila controller mem-push 0.0.0.0/0 (umum pada jaringan
+#     exit node), tanpa setelan ini host bisa mengirim traffic internetnya
+#     kembali ke tunnel miliknya sendiri (loop / pemutusan konektivitas);
+#   * allowGlobal=0  → route bertanda 'global' dari controller diabaikan di sisi
+#     SERVER ini. Klien yang ingin memakai exit node tetap mengaktifkan
+#     allowDefault=1 pada sisi klien (di luar cakupan repo ini).
+# Kegagalan bersifat NON-FATAL: zerotier-cli bisa belum siap (mis. saat @reboot)
+# atau node belum join; dicatat sebagai WARN agar bisa ditelusuri.
+configure_zt_policy() {
+  local cli k
+  cli="$(zt_cli_path)"
+  if [ -z "$cli" ]; then
+    log_warn "zerotier-cli tidak ditemukan — kebijakan interface ZeroTier dilewati."
+    return 0
+  fi
+  for k in allowManaged=1 allowDefault=0 allowGlobal=0; do
+    if "$cli" set "$NETWORK_ID" "$k" >/dev/null 2>&1; then
+      log_info "ZeroTier: set $k pada $NETWORK_ID — OK."
+    else
+      log_warn "ZeroTier: set $k pada $NETWORK_ID gagal (dilewati; tidak fatal)."
+    fi
+  done
+  return 0
+}
+
 write_moon_updater() {
   # PENTING: heredoc TANPA kutip sehingga nilai MOON_ID/MOON_CONFIG_URL dari
   # speedtest-repo.conf benar-benar tertanam (sebelumnya di-quote → nilai
@@ -397,9 +537,23 @@ write_moon_updater() {
 MOON_ID="$MOON_ID"
 MOON_CONFIG_URL="$MOON_CONFIG_URL"
 ZT_CLI="$ZEROTIER_CLI"
+PATH="$CRON_PATH"
+export PATH
 LOG_FILE="$UPDATER_LOG"
+MAX_KB="$REPORT_LOG_MAX_KB"
 
 log() { printf '%s %s\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOG_FILE" 2>/dev/null || true; }
+
+  # Rotasi log: cron berjalan tiap 15 menit; tanpa ini log bisa tumbuh
+  # tanpa batas di server kecil.
+  rotate_log() {
+    [ -f "\$LOG_FILE" ] || return 0
+    sz="\$(wc -c < "\$LOG_FILE" 2>/dev/null | awk '{print \$1}')"
+    case "\$sz" in ''|*[!0-9]*) sz=0 ;; esac
+    [ "\$sz" -gt \$(( MAX_KB * 1024 )) ] && mv -f "\$LOG_FILE" "\$LOG_FILE.1" 2>/dev/null
+    return 0
+  }
+  rotate_log
 
 [ -x "\$ZT_CLI" ] || ZT_CLI="\$(command -v zerotier-cli 2>/dev/null)"
 if [ -z "\$ZT_CLI" ]; then
@@ -408,7 +562,16 @@ if [ -z "\$ZT_CLI" ]; then
 fi
 
 MOON_FILE="/tmp/zt-moon.json.\$\$"
-if ! wget -q -O "\$MOON_FILE" "\$MOON_CONFIG_URL" 2>/dev/null; then
+dl_rc=0
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL --max-time 60 -o "\$MOON_FILE" "\$MOON_CONFIG_URL" 2>/dev/null || dl_rc=1
+elif command -v wget >/dev/null 2>&1; then
+  wget -q -T 60 -O "\$MOON_FILE" "\$MOON_CONFIG_URL" 2>/dev/null || dl_rc=1
+else
+  log "FAILED: curl/wget tidak tersedia"
+  exit 1
+fi
+if [ "\$dl_rc" -ne 0 ] || [ ! -s "\$MOON_FILE" ]; then
   rm -f "\$MOON_FILE"
   log "FAILED: tidak bisa mengunduh \$MOON_CONFIG_URL"
   exit 1
@@ -506,7 +669,10 @@ main() {
     log_warn "ZT_REQUIRE_AUTHORIZATION=Tidak → node boleh belum ter-authorize."
   fi
 
-  # 5) Exit node (opsional via konfigurasi repo)
+  # 5) Kebijakan interface (allowManaged/allowDefault/allowGlobal)
+  configure_zt_policy
+
+  # 6) Exit node (opsional via konfigurasi repo)
   if [ "$ZT_ENABLE_EXIT_NODE" = "Ya" ]; then
     enable_ip_forwarding || log_warn "IP forwarding belum aktif."
     setup_nat || log_warn "NAT belum terkonfigurasi (cek interface/tabel iptables)."
@@ -514,7 +680,7 @@ main() {
     log_info "ZT_ENABLE_EXIT_NODE=Tidak → IP forwarding & NAT dilewati."
   fi
 
-  # 6) Moon updater
+  # 7) Moon updater
   install_moon_updater
   run_moon_updater_now
 
@@ -522,14 +688,20 @@ main() {
   return 0
 }
 
-if [ "$MODE" = "-postboot" ]; then
+if [ "$MODE" = "-postboot" ] || [ "$MODE" = "--postboot" ]; then
   # Dipanggil cron @reboot: tegakkan kembali NAT/forwarding (rule iptables tidak
-  # persist antar-reboot) tanpa mengulang instalasi.
-  if [ "$ZT_ENABLE_EXIT_NODE" = "Ya" ]; then
-    enable_ip_forwarding || true
-    setup_nat || true
+  # persist antar-reboot) tanpa mengulang instalasi. Kegagalan DIKEMBALIKAN
+  # (exit != 0) supaya pemanggil (bagian10 → update.log) melaporkannya —
+  # versi lama menelan kegagalan dengan '|| true' (bug B15/B16).
+  rc=0
+  configure_zt_policy   # non-fatal: menegakkan kebijakan interface setelah reboot
+  if [ "${ZT_ENABLE_EXIT_NODE:-Ya}" = "Ya" ]; then
+    enable_ip_forwarding || rc=1
+    setup_nat || rc=1
+  else
+    log_info "ZT_ENABLE_EXIT_NODE=Tidak → IP forwarding & NAT dilewati."
   fi
-  exit 0
+  exit "$rc"
 fi
 
 if main; then

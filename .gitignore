@@ -20,6 +20,10 @@ OoklaServer.properties.default
 speedtestctl.sh
 cron-speedtest*.sh
 
+# Artefak Python (tools/)
+__pycache__/
+*.pyc
+
 # Sampah editor/OS
 *.swp
 *~

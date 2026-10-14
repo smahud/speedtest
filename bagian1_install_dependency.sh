@@ -84,9 +84,35 @@ install_ookla_binary() {
   return 1
 }
 
+# ── Terima lisensi CLI secara non-interaktif (WAJIB untuk cron) ──────────────
+# CLI Ookla MENOLAK berjalan tanpa TTY selama lisensi belum diterima:
+#   "To accept the message please run speedtest interactively or use --accept-license"
+# Cron tidak punya TTY → tanpa langkah ini SEMUA laporan cron gagal (rc=1) tanpa
+# jejak (bug v8.1.0). Yang menyimpan lisensi ke disk adalah uji pertama yang
+# BERHASIL; karena itu wrapper cron (bagian6) SELALU membawa flag lisensi,
+# sehingga laporan tetap jalan meski file lisensi belum terbentuk.
+accept_ookla_license() {
+  local bin
+  bin="$(ookla_cli_path)"
+  if [ -z "$bin" ]; then
+    log_warn "CLI Ookla belum ada — penerimaan lisensi dilewati."
+    return 1
+  fi
+  if ookla_license_accepted; then
+    log_ok "Lisensi Ookla sudah diterima sebelumnya ($(ookla_license_file))."
+  elif ookla_license_probe "$bin"; then
+    log_ok "CLI Ookla menerima flag lisensi non-interaktif (${SPEEDTEST_CLI_LICENSE_FLAGS:-})."
+    log_info "Lisensi tersimpan permanen setelah uji speedtest pertama (dilakukan di verifikasi akhir)."
+  else
+    log_warn "Flag lisensi CLI Ookla tidak diterima — pastikan yang terpasang adalah CLI Ookla resmi."
+  fi
+  return 0
+}
+
 install_speedtest_cli() {
   if speedtest_is_ookla; then
     log_ok "Speedtest CLI Ookla sudah terpasang. Dilewati."
+    accept_ookla_license
     return 0
   fi
   if command_exists speedtest; then
@@ -119,10 +145,15 @@ install_speedtest_cli() {
 
   if speedtest_is_ookla; then
     log_ok "Speedtest CLI Ookla terpasang via paket: $(command -v speedtest)"
+    accept_ookla_license
     return 0
   fi
 
-  install_ookla_binary || log_warn "Speedtest CLI Ookla tidak terpasang — cron reporting tidak akan berfungsi."
+  if install_ookla_binary; then
+    accept_ookla_license
+  else
+    log_warn "Speedtest CLI Ookla tidak terpasang — cron reporting tidak akan berfungsi."
+  fi
   return 0
 }
 
@@ -171,6 +202,15 @@ setup_cloudflare_credentials() {
 # Main
 # -----------------------------------------------------------------------------
 install_speedtest_cli
+
+# Ringkasan path CLI untuk audit operator — bagian6 memakai path yang sama
+# secara eksplisit agar cron (PATH minimal) tetap menemukannya.
+if [ -n "$(ookla_cli_path)" ]; then
+  log_info "Path CLI Ookla: $(ookla_cli_path) (dipakai eksplisit oleh cron reporting)."
+else
+  log_warn "CLI Ookla tidak ditemukan di ${SPEEDTEST_CLI_PATH:-/usr/local/bin/speedtest}."
+fi
+
 setup_cloudflare_credentials
 
 log_ok "Bagian 1 selesai."

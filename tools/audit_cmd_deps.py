@@ -66,6 +66,32 @@ OPTIONAL_REQUIRES_GUARD = {
     "pip3", "python3", "pip", "systemd-run", "semanage", "modprobe", "nft",
 }
 
+# ── E1. Artefak yang DIEKSEKUSI OLEH CRON ─────────────────────────────────────
+# Dasar bug v8.1.0 (B14/B15): cron Debian/Ubuntu/Alpine hanya memberi
+# PATH=/usr/bin:/bin → /usr/local/bin (CLI Ookla) dan /usr/sbin (iptables,
+# sysctl, ip) TIDAK terlihat, sehingga laporan & NAT mati tanpa pesan.
+# Aturan yang ditegakkan di sini: setiap artefak cron WAJIB menyetel PATH
+# eksplisit (umumnya dari $CRON_PATH di speedtest-repo.conf).
+CRON_ARTIFACTS = [
+    "bagian6_automaintenance.sh",   # menulis wrapper cron-speedtest*.sh
+    "bagian7_network.sh",           # dipanggil @reboot (--postboot)
+    "bagian10_hosts_ssh.sh",        # dipanggil @reboot + self-update
+    "speedtest-selfupdate.sh",      # cron harian (update + penegakan config)
+    "auto_update_lib.sh",           # dimuat oleh skrip cron di atas
+]
+
+# Wajib ada di wrapper yang DIBUAT (di dalam heredoc bagian6): PATH eksplisit,
+# path absolut CLI, dan flag lisensi (CLI menolak jalan tanpa TTY bila lisensi
+# belum diterima — bug B13).
+CRON_TEMPLATE_REQUIREMENTS = [
+    ("bagian6_automaintenance.sh", 'PATH="$CRON_PATH_RESOLVED"'),
+    ("bagian6_automaintenance.sh", "SPEEDTEST_FLAGS"),
+    ("bagian7_network.sh", "export PATH"),
+    # Artefak cron yang DIBUAT bagian4 (heredoc): wajib punya PATH eksplisit
+    # juga — kalau tidak, renewal/pemantau sertifikat dapat gagal senyap.
+    ("bagian4_install_server_certificate.sh", 'PATH="__CRON_PATH__"'),
+]
+
 HEREDOC_RE = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
 SEP_RE = re.compile(r"\|\||&&|;;|;|\||\(|\)|\$\(|`|&")
 PREFIX_RE = re.compile(
@@ -317,6 +343,33 @@ def main() -> int:
     print("   " + ", ".join(sorted(pkgs)) or "   (kosong)")
     print()
 
+    print("=== E. Audit konteks cron (PATH eksplisit wajib) ===")
+    cron_bad = []
+    for art in CRON_ARTIFACTS:
+        path = os.path.join(REPO, art)
+        if not os.path.exists(path):
+            print(f"   - {art:<32} [TIDAK ADA]")
+            cron_bad.append(art)
+            continue
+        text = open(path, encoding="utf-8", errors="replace").read()
+        # Dua mekanisme yang diterima:
+        #  1) PATH="..." eksplisit (mis. PATH="$CRON_PATH")
+        #  2) path_augment_from_cron_path() — menambahkan $CRON_PATH tanpa
+        #     menimpa PATH yang sudah ada (dipakai bagian7/10/self-update/lib)
+        has_path = (re.search(r"(?m)^\s*(export\s+)?PATH=", text) is not None
+                    or "path_augment_from_cron_path" in text)
+        print(f"   - {art:<32} {'OK' if has_path else 'TANPA PATH eksplisit'}")
+        if not has_path:
+            cron_bad.append(art)
+    for art, needle in CRON_TEMPLATE_REQUIREMENTS:
+        path = os.path.join(REPO, art)
+        text = open(path, encoding="utf-8", errors="replace").read() if os.path.exists(path) else ""
+        ok = needle in text
+        print(f"   - {art}: '{needle}' {'ada' if ok else 'HILANG'}")
+        if not ok:
+            cron_bad.append(f"{art}:{needle}")
+    print()
+
     print(f"=== B. Perintah opsional dengan guard 'command -v': {len(guarded)} ===")
     print("   " + ", ".join(sorted(guarded)))
     print()
@@ -325,6 +378,14 @@ def main() -> int:
     print()
 
     bad = False
+    if cron_bad:
+        bad = True
+        print("=== E2. MASALAH: artefak cron tanpa PATH eksplisit ===")
+        for item in cron_bad:
+            print(f"   - {item}")
+        print("   Tindakan: tambahkan PATH=\"$CRON_PATH\" + export PATH, atau pakai")
+        print("             path absolut (mis. $IPTABLES_BIN, $SPEEDTEST_CLI_PATH).")
+        print()
     if unguarded:
         bad = True
         print("=== C. MASALAH: perintah opsional TANPA guard ===")

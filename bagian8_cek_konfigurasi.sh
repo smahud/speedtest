@@ -19,29 +19,49 @@ detect_init
 
 log_info "== Bagian 8: Konfigurasi Service & Verifikasi Akhir =="
 
+CRON_PATH_RESOLVED="${CRON_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+REPORT_LOG="$BASE_DIR/report.log"
+
 # Generate management tool (speedtestctl.sh) di BASE_DIR.
 generate_ctl() {
   cat > "$BASE_DIR/speedtestctl.sh" <<'CTLEOF'
 #!/usr/bin/env bash
-# speedtestctl.sh — Management tool untuk OoklaServer
+# speedtestctl.sh — Management tool untuk OoklaServer + laporan speedtest.
 # Dibaca dari state file, jadi bisa dijalankan dari mana saja.
+
+# PATH eksplisit: tool ini bisa dipanggil dari cron/otomasi dengan PATH minimal.
+PATH="__CRON_PATH__"
+export PATH
 
 STATE_FILE="__STATE_FILE__"
 OOKLA_SCRIPT="__OOKLA_SCRIPT__"
 BASE_DIR="__BASE_DIR__"
 OOKLA_BIN="__OOKLA_BIN__"
 INIT_SYSTEM="__INIT_SYSTEM__"
+REPORT_LOG="__REPORT_LOG__"
+OOKLA_PROPERTIES="__OOKLA_PROPERTIES__"
 
 [ -f "$STATE_FILE" ] || { echo "State file tidak ditemukan: $STATE_FILE. Jalankan instalasi dulu."; exit 1; }
 
+# Port yang dibuka OoklaServer (dari properties; fallback 8080).
+tcp_ports() {
+  local p
+  p="$(grep -E '^[[:space:]]*OoklaServer[.]tcpPorts[[:space:]]*=' "$OOKLA_PROPERTIES" 2>/dev/null \
+       | tail -n1 | sed 's/.*=[[:space:]]*//' | tr ',' ' ')"
+  [ -n "$p" ] || p="8080"
+  printf '%s' "$p"
+}
+
 usage() {
-  echo "Usage: $0 {start|stop|restart|status|logs|uninstall}"
-  echo "  start      - Start OoklaServer"
-  echo "  stop       - Stop OoklaServer"
-  echo "  restart    - Restart OoklaServer"
-  echo "  status     - Cek status OoklaServer"
-  echo "  logs       - Tampilkan log instalasi"
-  echo "  uninstall  - Hapus service OoklaServer"
+  echo "Usage: $0 {start|stop|restart|status|report|logs|report-log|uninstall}"
+  echo "  start       - Start OoklaServer"
+  echo "  stop        - Stop OoklaServer"
+  echo "  restart     - Restart OoklaServer"
+  echo "  status      - Cek status OoklaServer"
+  echo "  report      - Jalankan 1x laporan speedtest sekarang (tanpa tunggu cron)"
+  echo "  logs        - Tampilkan log instalasi"
+  echo "  report-log  - Tampilkan 50 baris terakhir log laporan"
+  echo "  uninstall   - Hapus service OoklaServer"
 }
 
 case "${1:-}" in
@@ -55,13 +75,40 @@ case "${1:-}" in
     ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart )
     ;;
   logs)
-    [ -f "$BASE_DIR/install.log" ] && tail -50 "$BASE_DIR/install.log" || echo "Log tidak ditemukan."
+    if [ -f "$BASE_DIR/install.log" ]; then tail -50 "$BASE_DIR/install.log"; else echo "Log tidak ditemukan."; fi
+    ;;
+  report-log)
+    if [ -f "$REPORT_LOG" ]; then tail -50 "$REPORT_LOG"; else echo "Log laporan belum ada: $REPORT_LOG"; fi
+    ;;
+  report)
+    # Jalankan wrapper laporan per jam SEKARANG (tanpa menunggu jadwal cron).
+    if [ -x "$BASE_DIR/cron-speedtest.sh" ]; then
+      "$BASE_DIR/cron-speedtest.sh"
+      echo "Selesai. Lihat hasil: $0 report-log"
+    else
+      echo "Wrapper laporan tidak ada ($BASE_DIR/cron-speedtest.sh)."
+      echo "Jalankan dulu: bash $BASE_DIR/bagian6_automaintenance.sh"
+      exit 1
+    fi
     ;;
   status)
-    if pgrep -x OoklaServer >/dev/null 2>&1; then
-      echo "OoklaServer: RUNNING (BASE_DIR=$BASE_DIR)"
+    running=0
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x OoklaServer >/dev/null 2>&1; then
+      running=1
+    else
+      for port in $(tcp_ports); do
+        if command -v ss >/dev/null 2>&1; then
+          ss -tln 2>/dev/null | grep -q ":$port " && { running=1; break; }
+        elif command -v netstat >/dev/null 2>&1; then
+          netstat -tln 2>/dev/null | grep -q ":$port " && { running=1; break; }
+        fi
+      done
+    fi
+    if [ "$running" -eq 1 ]; then
+      echo "OoklaServer: RUNNING (BASE_DIR=$BASE_DIR, port: $(tcp_ports))"
     else
       echo "OoklaServer: STOPPED"
+      exit 1
     fi
     ;;
   uninstall)
@@ -88,8 +135,11 @@ CTLEOF
   sed -i "s|__BASE_DIR__|$BASE_DIR|" "$BASE_DIR/speedtestctl.sh"
   sed -i "s|__OOKLA_BIN__|$OOKLA_BIN|" "$BASE_DIR/speedtestctl.sh"
   sed -i "s|__INIT_SYSTEM__|$INIT_SYSTEM|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__CRON_PATH__|$CRON_PATH_RESOLVED|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__REPORT_LOG__|$REPORT_LOG|" "$BASE_DIR/speedtestctl.sh"
+  sed -i "s|__OOKLA_PROPERTIES__|$OOKLA_PROPERTIES|" "$BASE_DIR/speedtestctl.sh"
   chmod a+x "$BASE_DIR/speedtestctl.sh"
-  log_ok "Tool management siap: $BASE_DIR/speedtestctl.sh"
+  log_ok "Tool management siap: $BASE_DIR/speedtestctl.sh (start|stop|restart|status|report|logs|report-log)"
 }
 generate_ctl
 
@@ -195,12 +245,15 @@ log_info "Verifikasi runtime server..."
 sleep 10 # Waktu booting RAM rendah
 
 is_running() {
-  if pgrep -x "OoklaServer" >/dev/null 2>&1; then return 0; fi
-  if command -v netstat >/dev/null 2>&1; then
-    netstat -tuln 2>/dev/null | grep -q ":8080 " && return 0
-  elif command -v ss >/dev/null 2>&1; then
-    ss -tuln 2>/dev/null | grep -q ":8080 " && return 0
-  fi
+  local port
+  if command -v pgrep >/dev/null 2>&1 && pgrep -x "OoklaServer" >/dev/null 2>&1; then return 0; fi
+  for port in $(ookla_props_ports "$OOKLA_PROPERTIES" || printf '8080'); do
+    if command -v netstat >/dev/null 2>&1; then
+      netstat -tuln 2>/dev/null | grep -q ":$port " && return 0
+    elif command -v ss >/dev/null 2>&1; then
+      ss -tuln 2>/dev/null | grep -q ":$port " && return 0
+    fi
+  done
   return 1
 }
 
@@ -210,7 +263,11 @@ else
   log_warn "Server belum merespon. Mencoba restart paksa..."
   ( cd "$BASE_DIR" && "$OOKLA_SCRIPT" restart ) || true
   sleep 10
-  is_running && log_ok "OoklaServer BERJALAN." || log_error "Gagal start otomatis. Periksa log: $LOG_FILE"
+  if is_running; then
+    log_ok "OoklaServer BERJALAN."
+  else
+    log_error "Gagal start otomatis. Periksa log: $LOG_FILE"
+  fi
 fi
 
 print_hash 50

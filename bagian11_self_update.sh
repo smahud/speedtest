@@ -52,16 +52,17 @@ if [ "$AUTO_UPDATE_ENABLED" = "Ya" ]; then
   if cron_apply "$CRON_TAG" \
        "$AUTO_UPDATE_SCHEDULE_MIN $AUTO_UPDATE_SCHEDULE_HOUR * * * bash $SELFUPDATE_SCRIPT >/dev/null 2>&1" \
      && cron_apply "$BOOT_TAG" \
-       --purge "$NAT_TAG" --purge "$NETWORK_SCRIPT -postboot" \
-       "@reboot bash $POSTBOOT_SCRIPT -postboot >/dev/null 2>&1"; then
+       --purge "$NAT_TAG" --purge "$NETWORK_SCRIPT -postboot" --purge "$NETWORK_SCRIPT --postboot" \
+       --purge "$POSTBOOT_SCRIPT -postboot" \
+       "@reboot bash $POSTBOOT_SCRIPT --postboot >/dev/null 2>&1"; then
     log_ok "Self-update otomatis aktif: setiap hari pukul ${AUTO_UPDATE_SCHEDULE_HOUR}:$(printf '%02d' "$AUTO_UPDATE_SCHEDULE_MIN")"
-    log_ok "Boot-sync aktif: @reboot → $POSTBOOT_SCRIPT -postboot (hosts + SSH + NAT ZeroTier)"
+    log_ok "Boot-sync aktif: @reboot → $POSTBOOT_SCRIPT --postboot (hosts + SSH + NAT ZeroTier)"
   else
     log_warn "Gagal memasang cron self-update."
   fi
 else
   if cron_clear "$CRON_TAG" "$SELFUPDATE_SCRIPT" \
-     && cron_clear "$BOOT_TAG" "$POSTBOOT_SCRIPT -postboot"; then
+     && cron_clear "$BOOT_TAG" "$POSTBOOT_SCRIPT -postboot" "$POSTBOOT_SCRIPT --postboot"; then
     log_info "AUTO_UPDATE_ENABLED=Tidak → cron self-update & boot-sync lama dihapus."
   fi
 fi

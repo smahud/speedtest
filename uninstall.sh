@@ -85,7 +85,11 @@ safe_rm() {
   local target="$1"
   local desc="${2:-$1}"
   if [ -e "$target" ] || [ -L "$target" ]; then
-    rm -rf "$target" 2>/dev/null && log_ok "Dihapus: $desc" || log_warn "Gagal hapus: $target"
+    if rm -rf "$target" 2>/dev/null; then
+      log_ok "Dihapus: $desc"
+    else
+      log_warn "Gagal hapus: $target"
+    fi
   fi
 }
 
@@ -93,14 +97,18 @@ safe_rm_file() {
   local target="$1"
   local desc="${2:-$1}"
   if [ -f "$target" ] || [ -L "$target" ]; then
-    rm -f "$target" 2>/dev/null && log_ok "Dihapus: $desc" || log_warn "Gagal hapus: $target"
+    if rm -f "$target" 2>/dev/null; then
+      log_ok "Dihapus: $desc"
+    else
+      log_warn "Gagal hapus: $target"
+    fi
   fi
 }
 
 confirm() {
   if [ "$FORCE" -eq 1 ]; then return 0; fi
-  printf "\n${C_WARN}%s${C_RESET}\n" "$1"
-  printf "${C_WARN}Lanjutkan? (y/N): ${C_RESET}"
+  printf '\n%s%s%s\n' "$C_WARN" "$1" "$C_RESET"
+  printf '%sLanjutkan? (y/N): %s' "$C_WARN" "$C_RESET"
   read -r answer
   case "$answer" in
     [Yy]|[Yy][Ee][Ss]) return 0 ;;
@@ -226,6 +234,8 @@ if command -v crontab >/dev/null 2>&1; then
     | grep -vF '# speedtest-autoupdate (managed)' \
     | grep -vF '# speedtest-boot-sync (managed)' \
     | grep -vF '# speedtest-zt-nat-restore (managed)' \
+    | grep -vF '# speedtest-boot-fallback (managed)' \
+    | grep -vF '/usr/local/bin/zt-exitnode.sh' \
     | grep -vF '# speedtest-cert-renew (managed)' \
     | grep -vF '# speedtest-cert-check (managed)' \
     | grep -vF '# zt-moon-updater (managed)' \
@@ -269,21 +279,46 @@ safe_rm_file "/usr/sbin/zerotier-idtool" "ZeroTier ID tool symlink"
 safe_rm_file "/usr/local/bin/zt-exitnode.sh"    "ZT exit node script"
 safe_rm_file "/usr/local/bin/zt-moon-updater.sh" "ZT moon updater script"
 safe_rm_file "/var/log/zt-moon-updater.log"      "ZT moon updater log"
+safe_rm_file "/var/log/zt-moon-updater.log.1"    "ZT moon updater log (rotasi)"
 
-# Hapus paket (best effort)
-if command -v apk >/dev/null 2>&1; then
-  apk del zerotier-one 2>/dev/null && log_ok "Paket zerotier-one dihapus (apk)." || true
-elif command -v apt-get >/dev/null 2>&1; then
-  apt-get remove -y zerotier-one 2>/dev/null && log_ok "Paket zerotier-one dihapus (apt)." || true
-elif command -v dnf >/dev/null 2>&1; then
-  dnf remove -y zerotier-one 2>/dev/null && log_ok "Paket zerotier-one dihapus (dnf)." || true
-elif command -v yum >/dev/null 2>&1; then
-  yum remove -y zerotier-one 2>/dev/null && log_ok "Paket zerotier-one dihapus (yum)." || true
+# Hapus paket (best effort) — status dilaporkan SETELAH diverifikasi, bukan
+# sekedar "perintahnya dijalankan" (biar tidak ada klaim palsu di log).
+pkg_zt_gone() {
+  # return 0 = paket SUDAH tidak ada; return 1 = masih ada / tidak bisa dipastikan
+  if command -v dpkg >/dev/null 2>&1; then
+    if dpkg -s zerotier-one >/dev/null 2>&1; then return 1; fi
+  elif command -v rpm >/dev/null 2>&1; then
+    if rpm -q zerotier-one >/dev/null 2>&1; then return 1; fi
+  elif command -v apk >/dev/null 2>&1; then
+    if apk info -e zerotier-one >/dev/null 2>&1; then return 1; fi
+  else
+    return 1   # tidak ada package manager yang dikenal → jangan klaim "sudah bersih"
+  fi
+  return 0
+}
+if command -v dpkg >/dev/null 2>&1 && dpkg -s zerotier-one >/dev/null 2>&1; then
+  apt-get remove -y zerotier-one >/dev/null 2>&1 || true
+elif command -v rpm >/dev/null 2>&1 && rpm -q zerotier-one >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1; then
+    dnf remove -y zerotier-one >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum remove -y zerotier-one >/dev/null 2>&1 || true
+  fi
+elif command -v apk >/dev/null 2>&1 && apk info -e zerotier-one >/dev/null 2>&1; then
+  apk del zerotier-one >/dev/null 2>&1 || true
+fi
+if pkg_zt_gone; then
+  log_info "Paket zerotier-one tidak terpasang lagi (atau memang tidak pernah dipasang)."
+else
+  log_warn "Paket zerotier-one masih terdaftar di package manager — hapus manual bila perlu."
 fi
 
 # VERIFIKASI: pastikan identity tetap ada
 if [ -d /var/lib/zerotier-one ]; then
-  ZT_ID_COUNT=$(ls /var/lib/zerotier-one/identity.* 2>/dev/null | wc -l)
+  ZT_ID_COUNT=0
+  for _idf in /var/lib/zerotier-one/identity.*; do
+    [ -e "$_idf" ] && ZT_ID_COUNT=$((ZT_ID_COUNT + 1))
+  done
   log_ok "/var/lib/zerotier-one DISIMPAN ($ZT_ID_COUNT file identity) — Node ID TETAP."
 else
   log_warn "/var/lib/zerotier-one tidak ditemukan (mungkin belum pernah diinstal)."
@@ -292,19 +327,43 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP 5: REMOVE SPEEDTEST CLI
 # ═══════════════════════════════════════════════════════════════════════════
-log_step "Step 5: Menghapus Speedtest CLI"
+log_step "Step 5: Menghapus Speedtest CLI (Ookla)"
 
-safe_rm_file "/usr/local/bin/speedtest" "Speedtest CLI (local)"
-safe_rm_file "/usr/bin/speedtest"       "Speedtest CLI (system)"
+# HANYA CLI Ookla yang dihapus. 'speedtest-cli' (Python/sivel) atau biner lain
+# milik operator TIDAK disentuh — versi lama menghapus /usr/bin/speedtest dan
+# 'apk del speedtest-cli' secara membabi buta.
+is_ookla_cli() {
+  [ -x "$1" ] || return 1
+  "$1" --version 2>/dev/null | grep -qi 'ookla'
+}
 
-if command -v apk >/dev/null 2>&1; then
-  apk del speedtest-cli 2>/dev/null && log_ok "Paket speedtest-cli dihapus (apk)." || true
-elif command -v apt-get >/dev/null 2>&1; then
+for _cli in /usr/local/bin/speedtest /usr/bin/speedtest; do
+  if [ -e "$_cli" ] || [ -L "$_cli" ]; then
+    if is_ookla_cli "$_cli"; then
+      safe_rm_file "$_cli" "Speedtest CLI Ookla ($_cli)"
+    else
+      log_info "Dilewati (bukan CLI Ookla, milik operator): $_cli"
+    fi
+  fi
+done
+
+# Konfigurasi/lisensi CLI Ookla (dibuat otomatis saat uji pertama)
+for _h in "/root" "${HOME:-/root}"; do
+  [ -n "$_h" ] || continue
+  safe_rm "$_h/.config/ookla" "Konfigurasi CLI Ookla ($_h)"
+done
+
+# Paket Ookla (hanya bila memang terpasang sebagai paket distro)
+if command -v dpkg >/dev/null 2>&1 && dpkg -l speedtest 2>/dev/null | grep -q '^ii'; then
   apt-get remove -y speedtest 2>/dev/null && log_ok "Paket speedtest dihapus (apt)." || true
-elif command -v dnf >/dev/null 2>&1; then
-  dnf remove -y speedtest 2>/dev/null && log_ok "Paket speedtest dihapus (dnf)." || true
-elif command -v yum >/dev/null 2>&1; then
-  yum remove -y speedtest 2>/dev/null && log_ok "Paket speedtest dihapus (yum)." || true
+elif command -v rpm >/dev/null 2>&1 && rpm -q speedtest >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1; then
+    dnf remove -y speedtest 2>/dev/null && log_ok "Paket speedtest dihapus (dnf)." || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum remove -y speedtest 2>/dev/null && log_ok "Paket speedtest dihapus (yum)." || true
+  fi
+else
+  log_info "Tidak ada paket 'speedtest' yang terpasang — tidak ada paket yang dihapus."
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -341,21 +400,78 @@ safe_rm_file "/etc/sysctl.d/99-ipforward.conf" "IP forwarding config"
 # `iptables -F FORWARD`, dan `sysctl -w net.ipv4.ip_forward=0` — ketiganya
 # GLOBAL dan bisa merusak jaringan Docker/libvirt/K8s/router di host yang sama.
 # Sekarang hanya rule milik kita (spesifik interface) yang dihapus.
-if command -v iptables >/dev/null 2>&1; then
+# iptables/ip diambil via PATH bila ada, jika tidak pakai path absolut
+# (/usr/sbin tidak ada di PATH minimal cron/systemd-timer).
+IPT_BIN="$(command -v iptables 2>/dev/null || true)"
+[ -n "$IPT_BIN" ] || { [ -x /usr/sbin/iptables ] && IPT_BIN="/usr/sbin/iptables"; }
+IP_BIN_LOCAL="$(command -v ip 2>/dev/null || true)"
+[ -n "$IP_BIN_LOCAL" ] || { [ -x /usr/sbin/ip ] && IP_BIN_LOCAL="/usr/sbin/ip"; }
+
+# Hapus MAKSIMAL $2 rule yang cocok (default 5).
+# Versi lama memakai 'while iptables -C ...; do iptables -D ...; done' TANPA
+# batas: bila -C menjawab "ada" tetapi -D tidak benar-benar menghapus (wrapper
+# iptables, backend nft, atau rule yang dilindungi), loop berputar SELAMANYA
+# dan uninstall menggantung. Sekarang dibatasi + setiap langkah diverifikasi.
+ipt_del_max() {
+  # shellcheck disable=SC2086  # $spec SENGAJA dipecah menjadi argumen (-t nat POSTROUTING …)
+  local spec="$1" max="${2:-5}" i=0
+  while [ "$i" -lt "$max" ]; do
+    # shellcheck disable=SC2086
+    "$IPT_BIN" -C $spec 2>/dev/null || break
+    # shellcheck disable=SC2086
+    "$IPT_BIN" -D $spec 2>/dev/null || break
+    i=$((i + 1))
+  done
+  return 0
+}
+
+if [ -n "$IPT_BIN" ]; then
   log_info "Menghapus rule NAT spesifik ZeroTier (bila ada)..."
-  ZT_IF="$(ip -o link show 2>/dev/null | grep -o 'zt[a-z0-9]*' | head -n 1)"
-  PUB_IF="$(ip route 2>/dev/null | grep default | awk '{print $5}' | head -n 1)"
+  ZT_IF=""; PUB_IF=""; ZT_SUBNET=""
+  if [ -n "$IP_BIN_LOCAL" ]; then
+    ZT_IF="$("$IP_BIN_LOCAL" -o link show 2>/dev/null | grep -o 'zt[a-z0-9]*' | head -n 1)"
+    PUB_IF="$("$IP_BIN_LOCAL" route 2>/dev/null | grep default | awk '{print $5}' | head -n 1)"
+    if [ -n "$ZT_IF" ]; then
+      ZT_SUBNET="$("$IP_BIN_LOCAL" -4 -o addr show dev "$ZT_IF" 2>/dev/null | awk '{print $4}' | head -n 1)"
+    fi
+  fi
   if [ -n "$ZT_IF" ] && [ -n "$PUB_IF" ]; then
-    while iptables -t nat -C POSTROUTING -o "$PUB_IF" -j MASQUERADE 2>/dev/null; do
-      iptables -t nat -D POSTROUTING -o "$PUB_IF" -j MASQUERADE 2>/dev/null || break
-    done
-    while iptables -C FORWARD -i "$ZT_IF" -o "$PUB_IF" -j ACCEPT 2>/dev/null; do
-      iptables -D FORWARD -i "$ZT_IF" -o "$PUB_IF" -j ACCEPT 2>/dev/null || break
-    done
-    while iptables -C FORWARD -i "$PUB_IF" -o "$ZT_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do
-      iptables -D FORWARD -i "$PUB_IF" -o "$ZT_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || break
-    done
-    log_ok "Rule NAT ZeroTier dibersihkan (rule lain tidak disentuh)."
+    NAT_RULES_DELETED=0
+
+    # 1) Rule milik kita (v8.1.1+): masquerade DIBATASI ke subnet ZeroTier.
+    if [ -n "$ZT_SUBNET" ] && "$IPT_BIN" -t nat -C POSTROUTING -s "$ZT_SUBNET" -o "$PUB_IF" -j MASQUERADE 2>/dev/null; then
+      ipt_del_max "-t nat POSTROUTING -s $ZT_SUBNET -o $PUB_IF -j MASQUERADE" 5
+      log_ok "Rule masquerade ZeroTier ($ZT_SUBNET → $PUB_IF) dihapus."
+      NAT_RULES_DELETED=1
+    fi
+
+    # 2) Rule FORWARD (spesifik interface ZeroTier → jelas milik kita).
+    if "$IPT_BIN" -C FORWARD -i "$ZT_IF" -o "$PUB_IF" -j ACCEPT 2>/dev/null; then
+      ipt_del_max "FORWARD -i $ZT_IF -o $PUB_IF -j ACCEPT" 5
+      NAT_RULES_DELETED=1
+    fi
+    if "$IPT_BIN" -C FORWARD -i "$PUB_IF" -o "$ZT_IF" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; then
+      ipt_del_max "FORWARD -i $PUB_IF -o $ZT_IF -m state --state RELATED,ESTABLISHED -j ACCEPT" 5
+      NAT_RULES_DELETED=1
+    fi
+
+    # 3) Kompatibilitas versi lama (rule masquerade GENERIK '# -o $PUB_IF'):
+    #    hanya bila tidak ada rule ter-scope di atas. Maksimal SATU rule dihapus
+    #    — rule generik tidak bisa dipastikan milik kita (bisa milik
+    #    Docker/OpenVPN/libvirt di host yang sama), jadi operator diberi tahu.
+    if [ "$NAT_RULES_DELETED" -eq 0 ] && "$IPT_BIN" -t nat -C POSTROUTING -o "$PUB_IF" -j MASQUERADE 2>/dev/null; then
+      ipt_del_max "-t nat POSTROUTING -o $PUB_IF -j MASQUERADE" 1
+      log_warn "Rule masquerade GENERIK untuk $PUB_IF ditemukan (peninggalan versi lama):"
+      log_warn "  satu rule dihapus. Bila host ini memakai NAT sendiri untuk $PUB_IF,"
+      log_warn "  periksa ulang: iptables -t nat -L POSTROUTING -n -v"
+      NAT_RULES_DELETED=1
+    fi
+
+    if [ "$NAT_RULES_DELETED" -eq 1 ]; then
+      log_ok "Rule NAT ZeroTier dibersihkan (rule lain tidak disentuh)."
+    else
+      log_info "Tidak ada rule NAT ZeroTier yang perlu dihapus."
+    fi
   else
     log_warn "Interface ZeroTier tidak ditemukan — rule NAT dibiarkan (hapus manual bila perlu)."
   fi
@@ -433,6 +549,9 @@ for u in $UF_SSH_USERS root; do
   [ -n "$home_dir" ] || home_dir="$(awk -F: -v u="$u" '$1 == u { print $6; exit }' /etc/passwd 2>/dev/null)"
   [ -n "$home_dir" ] || { [ "$u" = "root" ] && home_dir="/root"; }
   [ -n "$home_dir" ] || continue
+  for _junk in "$home_dir"/.ssh/authorized_keys.speedtesttmp.* "$home_dir"/.ssh/authorized_keys.p10tmp; do
+    [ -e "$_junk" ] && rm -f "$_junk" 2>/dev/null || true
+  done
   ak="$home_dir/.ssh/authorized_keys"
   [ -f "$ak" ] || continue
   grep -qF "# BEGIN $UF_SSH_MARKER" "$ak" 2>/dev/null || continue
@@ -521,6 +640,8 @@ OoklaServer.pid
 install.log
 update.log
 update.log.1
+report.log
+report.log.1
 "
 for f in $MANAGED_FILES; do
   safe_rm_file "$BASE_DIR/$f" "$f"
@@ -534,8 +655,10 @@ safe_rm "$BASE_DIR/.update-staging" "staging update"
 safe_rm "$BASE_DIR/.update.lock"   "lock update"
 safe_rm "$BASE_DIR/.ssh-backups"   "backup konfigurasi SSH"
 
-# Sisa archive
-for leftover in "$BASE_DIR"/*.tgz "$BASE_DIR"/*.tar.gz "$BASE_DIR"/OoklaServer-* "$BASE_DIR"/*.tmp.* "$BASE_DIR"/.version-probe.* "$BASE_DIR"/.version-pin-probe.*; do
+# Sisa archive & file temporer (termasuk *.speedtesttmp.* dari operasi kunci/sshd)
+for leftover in "$BASE_DIR"/*.tgz "$BASE_DIR"/*.tar.gz "$BASE_DIR"/OoklaServer-* \
+                "$BASE_DIR"/*.tmp.* "$BASE_DIR"/*.speedtesttmp.* "$BASE_DIR"/*.uninstall.tmp \
+                "$BASE_DIR"/.version-probe.* "$BASE_DIR"/.version-pin-probe.*; do
   if [ -f "$leftover" ]; then
     safe_rm_file "$leftover" "$(basename "$leftover")"
   fi
